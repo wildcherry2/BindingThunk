@@ -56,36 +56,106 @@ FuncArgInfo::FuncArgInfo(const FuncSignature& Signature)
     _Signature = Signature;
 }
 
-const std::vector<asmjit::FuncValue>& FuncArgInfo::GetArguments() {
-    if (_ArgRegs) return *_ArgRegs;
-    _ArgRegs = std::vector<asmjit::FuncValue>{};
+const std::vector<asmjit::FuncValue>& FuncArgInfo::GetArguments() noexcept {
+    if (_ArgVals) return *_ArgVals;
+    _ArgVals = std::vector<asmjit::FuncValue>{};
     for (uint32_t ArgPackIndex = 0; ArgPackIndex < asmjit::Globals::kMaxFuncArgs; ++ArgPackIndex) {
         const auto& Pack = Detail().arg_packs()[ArgPackIndex];
         if (Pack.count() == 0) break;
         for (uint32_t PackIndex = 0; PackIndex < Pack.count(); ++PackIndex) {
             const auto& SrcArg = Pack[PackIndex];
             if (SrcArg.is_assigned()) {
-                _ArgRegs->push_back(SrcArg);
+                _ArgVals->push_back(SrcArg);
             }
         }
     }
-    return *_ArgRegs;
+    return *_ArgVals;
 }
 
-const std::vector<asmjit::FuncValue>& FuncArgInfo::GetReturnValues() {
-    if (_RetRegs) return *_RetRegs;
-    _RetRegs = std::vector<asmjit::FuncValue>{};
+const std::vector<asmjit::FuncValue>& FuncArgInfo::GetReturnValues() noexcept {
+    if (_RetVals) return *_RetVals;
+    _RetVals = std::vector<asmjit::FuncValue>{};
     for (uint32_t PackIndex = 0; PackIndex < Detail().ret_pack().count(); ++PackIndex) {
         const auto& DestArg = Detail().ret_pack()[PackIndex];
         if (DestArg.is_assigned()) {
-            _RetRegs->push_back(DestArg);
+            _RetVals->push_back(DestArg);
         }
     }
-
-    return *_RetRegs;
+    return *_RetVals;
 }
 
-asmjit::RegMask FuncArgInfo::GpRegMask() const { return _GpRegMask; }
-asmjit::RegMask FuncArgInfo::VecRegMask() const { return _VecRegMask; }
-const asmjit::FuncSignature& FuncArgInfo::Signature() const{ return _Signature; }
-const asmjit::FuncDetail& FuncArgInfo::Detail() const { return _Detail; }
+asmjit::RegMask FuncArgInfo::GpRegMask() const noexcept { return _GpRegMask; }
+asmjit::RegMask FuncArgInfo::VecRegMask() const noexcept { return _VecRegMask; }
+
+bool FuncArgInfo::IsArgumentRegister(const Gp& Reg) const noexcept {
+    return (1 << Reg.id()) & _GpRegMask;
+}
+
+bool FuncArgInfo::IsArgumentRegister(const Vec& Reg) const noexcept {
+    return (1 << Reg.id()) & _VecRegMask;
+}
+
+bool FuncArgInfo::IsArgumentRegister(const asmjit::Operand& Reg) const noexcept {
+    if (Reg.is_gp()) return IsArgumentRegister(Reg.as<Gp>());
+    if (Reg.is_vec()) return IsArgumentRegister(Reg.as<Vec>());
+    return false;
+}
+
+const std::vector<Gp> & FuncArgInfo::GetArgumentIntegralRegisters() noexcept {
+    if (_IntArgRegs) return *_IntArgRegs;
+    _IntArgRegs = std::vector<Gp>{};
+    for (int I = 0; I < 32; ++I) {
+        if ((1 << I) & _GpRegMask) _IntArgRegs->push_back(asmjit::x86::gpq(I));
+    }
+    return *_IntArgRegs;
+}
+
+const std::vector<Vec> & FuncArgInfo::GetArgumentFloatingRegisters() noexcept {
+    if (_VecArgRegs) return *_VecArgRegs;
+    _VecArgRegs = std::vector<Vec>{};
+    for (int I = 0; I < 32; ++I) {
+        if ((1 << I) & _VecRegMask) _VecArgRegs->push_back(asmjit::x86::xmm(I));
+    }
+    return *_VecArgRegs;
+}
+
+const asmjit::FuncSignature& FuncArgInfo::Signature() const noexcept { return _Signature; }
+const asmjit::FuncDetail& FuncArgInfo::Detail() const noexcept { return _Detail; }
+
+inline const asmjit::CallConv& GetCallingConvention() {
+    static asmjit::CallConv CallConv = [] {
+        asmjit::CallConv Convention{};
+        Convention.init(asmjit::CallConvId::kCDecl, GetJitRuntime().environment());
+        return Convention;
+    }();
+
+    return CallConv;
+}
+
+const std::vector<Gp>& GetNonVolatileGpRegs() {
+    static std::vector<Gp> Regs = [] {
+        const auto& Conv = GetCallingConvention();
+        std::vector<Gp> Regs {};
+        auto Preserved = Conv.preserved_regs(asmjit::RegGroup::kGp);
+        for (int I = 0; I < 32; ++I) {
+            if ((1 << I) & Preserved) Regs.push_back(asmjit::x86::gpq(I));
+        }
+        return Regs;
+    }();
+
+    return Regs;
+}
+
+const std::vector<Vec>& GetNonVolatileVecRegs() {
+    static std::vector<Vec> Regs = [] {
+        const auto& Conv = GetCallingConvention();
+        std::vector<Vec> Regs {};
+        auto Preserved = Conv.preserved_regs(asmjit::RegGroup::kVec);
+        for (int I = 0; I < 32; ++I) {
+            if ((1 << I) & Preserved) Regs.push_back(asmjit::x86::xmm(I));
+        }
+        return Regs;
+    }();
+
+    return Regs;
+}

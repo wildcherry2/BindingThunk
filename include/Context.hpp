@@ -47,34 +47,6 @@ inline std::unordered_map<asmjit::Operand, size_t> RegisterContextOffsets = {
 };
 #undef mro
 
-inline std::unordered_set<asmjit::Operand> PlatformNonvolatileIntegralRegisters = {
-    asmjit::x86::r12,
-    asmjit::x86::r13,
-    asmjit::x86::r14,
-    asmjit::x86::r15,
-    asmjit::x86::rdi,
-    asmjit::x86::rsi,
-    asmjit::x86::rbx
-};
-
-inline std::unordered_set<asmjit::Operand> PlatformNonvolatileFloatingRegisters = {
-    asmjit::x86::xmm6,
-    asmjit::x86::xmm7,
-    asmjit::x86::xmm8,
-    asmjit::x86::xmm9,
-    asmjit::x86::xmm10,
-    asmjit::x86::xmm11,
-    asmjit::x86::xmm12,
-    asmjit::x86::xmm13,
-    asmjit::x86::xmm14,
-    asmjit::x86::xmm15,
-};
-
-inline constexpr auto PlatformMaxIntegralArgumentRegisterCount = 4;
-inline constexpr auto PlatformMaxFloatingArgumentRegisterCount = 4;
-inline constexpr auto PlatformNonvolatileIntegralRegisterCount = 7;
-inline constexpr auto PlatformNonvolatileFloatingRegisterCount = 10;
-
 struct RegisterContextStack {
     static void Push(RegisterContext* Context);
     static void Pop();

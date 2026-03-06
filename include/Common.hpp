@@ -45,21 +45,37 @@ public:
     FuncArgInfo() = delete;
     explicit FuncArgInfo(const FuncSignature& Signature);
 
-    [[nodiscard]] const std::vector<asmjit::FuncValue>& GetArguments();
-    [[nodiscard]] const std::vector<asmjit::FuncValue>& GetReturnValues();
-    [[nodiscard]] RegMask GpRegMask() const;
-    [[nodiscard]] RegMask VecRegMask() const;
-    [[nodiscard]] const FuncSignature& Signature() const;
-    [[nodiscard]] const FuncDetail& Detail() const;
+    // returns FuncValues in the order in which they're used to construct the arguments in the signature
+    [[nodiscard]] const std::vector<asmjit::FuncValue>& GetArguments() noexcept;
+    [[nodiscard]] const std::vector<asmjit::FuncValue>& GetReturnValues() noexcept;
+    [[nodiscard]] RegMask GpRegMask() const noexcept;
+    [[nodiscard]] RegMask VecRegMask() const noexcept;
+    [[nodiscard]] bool IsArgumentRegister(const Gp& Reg) const noexcept;
+    [[nodiscard]] bool IsArgumentRegister(const Vec& Reg) const noexcept;
+    [[nodiscard]] bool IsArgumentRegister(const asmjit::Operand& Reg) const noexcept;
+
+    // returns Gp registers used in the arguments. not guaranteed to be in order.
+    [[nodiscard]] const std::vector<Gp>& GetArgumentIntegralRegisters() noexcept;
+
+    // returns Vec registers used in the arguments. not guaranteed to be in order.
+    [[nodiscard]] const std::vector<Vec>& GetArgumentFloatingRegisters() noexcept;
+
+    [[nodiscard]] const FuncSignature& Signature() const noexcept;
+    [[nodiscard]] const FuncDetail& Detail() const noexcept;
 
 private:
     RegMask _GpRegMask{};
     RegMask _VecRegMask{};
     FuncSignature _Signature{};
     FuncDetail _Detail{};
-    std::optional<std::vector<asmjit::FuncValue>> _ArgRegs{};
-    std::optional<std::vector<asmjit::FuncValue>> _RetRegs{};
+    std::optional<std::vector<asmjit::FuncValue>> _ArgVals{};
+    std::optional<std::vector<asmjit::FuncValue>> _RetVals{};
+    std::optional<std::vector<Gp>> _IntArgRegs{};
+    std::optional<std::vector<Vec>> _VecArgRegs{};
 };
+
+static const std::vector<Gp>& GetNonVolatileGpRegs();
+static const std::vector<Vec>& GetNonVolatileVecRegs();
 
 // borrowed from SafetyHook
 union Xmm {
