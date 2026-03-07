@@ -20,20 +20,21 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     const auto IntArgSpace = ArgInfo.GetArgumentIntegralRegisters().size() * 8;
     const auto FltArgSpace = ArgInfo.GetArgumentFloatingRegisters().size() * 16;
     auto SumSpace = ShadowArgSpace + NVIntRegSpace + NVFltRegSpace + IntArgSpace + FltArgSpace;
-    SumSpace += SumSpace % 16 == 8 ? 0 : 8;
+    const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
+    SumSpace += Pad;
     TheAssembler.sub(rsp, SumSpace);
     auto GpScratchReg = GetPlatformGpScratchReg();
     /*
      * Roughly:
      * struct Locals {
-     *      ShadowArgSpace  // offset 0
-     *      IntArgSpace     // offset sizeof ShadowArgSpace
-     *      FltArgSpace     // offset sizeof ShadowArgSpace + sizeof IntArgSpace
-     *      NVIntRegSpace   // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace
-     *      NVFltRegSpace   // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace + NVIntRegSpace
+     *      ShadowArgSpace + Padding  // offset 0
+     *      IntArgSpace               // offset sizeof ShadowArgSpace
+     *      FltArgSpace               // offset sizeof ShadowArgSpace + sizeof IntArgSpace
+     *      NVIntRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace
+     *      NVFltRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace + NVIntRegSpace
      * }
      */
-    const auto IntArgPtr = ptr(rsp, ShadowArgSpace);                  // treat as an array of uint64_t
+    const auto IntArgPtr = ptr(rsp, ShadowArgSpace + Pad);      // treat as an array of uint64_t
     const auto FltArgPtr = IntArgPtr.clone_adjusted(IntArgSpace);          // treat as an array of Xmm
     const auto NVIntRegPtr = FltArgPtr.clone_adjusted(FltArgSpace);        // treat as an array of uint64_t
     const auto NVFltRegPtr = NVIntRegPtr.clone_adjusted(NVIntRegSpace);    // treat as an array of Xmm
