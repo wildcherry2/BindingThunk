@@ -15,13 +15,14 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     // allocate locals with shadow space for calls (call to 'CallTo' will always take the most space so we use ArgInfo.Detail().arg_stack_size())
     // we'll need space for all nonvolatile registers and argument registers in addition to the shadow/arg space + alignment.
     const auto ShadowArgSpace = ArgInfo.Detail().arg_stack_size();
-    const auto NVIntRegSpace = GetNonVolatileGpRegs().size() * 8;
-    const auto NVFltRegSpace = GetNonVolatileVecRegs().size() * 16;
+    const auto NVIntRegSpace = GetPlatformNonVolatileGpRegs().size() * 8;
+    const auto NVFltRegSpace = GetPlatformNonVolatileVecRegs().size() * 16;
     const auto IntArgSpace = ArgInfo.GetArgumentIntegralRegisters().size() * 8;
     const auto FltArgSpace = ArgInfo.GetArgumentFloatingRegisters().size() * 16;
     auto SumSpace = ShadowArgSpace + NVIntRegSpace + NVFltRegSpace + IntArgSpace + FltArgSpace;
     SumSpace += SumSpace % 16 == 8 ? 0 : 8;
     TheAssembler.sub(rsp, SumSpace);
+    auto GpScratchReg = GetPlatformGpScratchReg();
     /*
      * Roughly:
      * struct Locals {
@@ -36,7 +37,7 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     const auto FltArgPtr = IntArgPtr.clone_adjusted(IntArgSpace);          // treat as an array of Xmm
     const auto NVIntRegPtr = FltArgPtr.clone_adjusted(FltArgSpace);        // treat as an array of uint64_t
     const auto NVFltRegPtr = NVIntRegPtr.clone_adjusted(NVIntRegSpace);    // treat as an array of Xmm
-    const auto RspInitial = NVFltRegPtr.clone_adjusted(NVFltRegSpace);     // pointer to what rsp was at the beginning of the function
+    const auto RspInitial = NVFltRegPtr.clone_adjusted(NVFltRegSpace + 8); // pointer to what rsp was at the beginning of the function + return address space
 
 
     // we need to call RegisterContextStack::Top, so we need to save the registers with arguments first
@@ -49,18 +50,18 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
             TheAssembler.movdqu(FltArgPtr.clone_adjusted(16 * FloatIndex++), Arg);
         }
     }
-
+    //TheAssembler.offset()
     TheAssembler.call(&RegisterContextStack::Top); // shadow space already allocated
 
     // restore context, except for arg registers
     // start with pushing nv-registers, since we'll have to restore them after the call
     {
         int Index = 0;
-        for (auto& Register : GetNonVolatileGpRegs()) {
+        for (auto& Register : GetPlatformNonVolatileGpRegs()) {
             TheAssembler.mov(NVIntRegPtr.clone_adjusted(8 * Index++), Register);
         }
         Index = 0;
-        for (auto& Register : GetNonVolatileVecRegs()) {
+        for (auto& Register : GetPlatformNonVolatileVecRegs()) {
             TheAssembler.movdqu(NVFltRegPtr.clone_adjusted(16 * Index++), Register);
         }
     }
@@ -68,14 +69,14 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     // move arguments on the stack to new stack slot for the call (already allocated)
     for (auto& Arg: ArgInfo.GetArguments()) {
         if (Arg.is_stack()) {
-            TheAssembler.mov(r11, RspInitial.clone_adjusted(Arg.stack_offset()));
-            TheAssembler.mov(ptr(rsp, Arg.stack_offset()), r11);
+            TheAssembler.mov(GpScratchReg, RspInitial.clone_adjusted(Arg.stack_offset()));
+            TheAssembler.mov(ptr(rsp, Arg.stack_offset()), GpScratchReg);
         }
     }
 
     // restore rflags
-    TheAssembler.mov(r11, ptr(rax, offsetof(RegisterContext, rflags)));
-    TheAssembler.push(r11);
+    TheAssembler.mov(GpScratchReg, ptr(rax, offsetof(RegisterContext, rflags)));
+    TheAssembler.push(GpScratchReg);
     TheAssembler.popfq();
 
     // restore all saved registers that aren't args
@@ -112,11 +113,11 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     // restore nv-registers
     {
         int Index = 0;
-        for (auto& Register : GetNonVolatileGpRegs()) {
+        for (auto& Register : GetPlatformNonVolatileGpRegs()) {
             TheAssembler.mov(Register, NVIntRegPtr.clone_adjusted(8 * Index++));
         }
         Index = 0;
-        for (auto& Register : GetNonVolatileVecRegs()) {
+        for (auto& Register : GetPlatformNonVolatileVecRegs()) {
             TheAssembler.movdqu(Register, NVFltRegPtr.clone_adjusted(16 * Index++));
         }
     }

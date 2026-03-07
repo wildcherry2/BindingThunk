@@ -16,12 +16,12 @@ static double testcomplexfn(void* bound, double p0, int p1, float p2, float p3, 
 int main() {
     void* binder = (void*)0x42;
     try {
-        //auto bind0 = GenerateBindingThunk(testsimplefn, binder);
+        auto bind = GenerateBindingThunk(testcomplexfn, binder, EBindingThunkType::WithRegisterContext);
 
-        auto bind = GenerateRestoreThunk(testcomplexfn);
+        //auto bind = GenerateRestoreThunk(testcomplexfn);
         //testcomplexfn((void*)0x42, 1.0, 2, 3.0, false, 123, 456, 5.5, 7.2);
-        //auto ret = reinterpret_cast<double(*)(double, int, float, float, int64_t, int64_t, double, double)>(bind.get())(1.0, 2, 3.0, 4.0, 5, 6, 7.0, 8.0);
-        //std::cout << ret << std::endl;
+        auto ret = reinterpret_cast<double(*)(double, int, float, float, int64_t, int64_t, double, double)>(bind.get())(1.0, 2, 3.0, 4.0, 5, 6, 7.0, 8.0);
+        std::cout << ret << std::endl;
     } catch (std::exception& e) {
         std::cerr << e.what() << std::endl;
     }

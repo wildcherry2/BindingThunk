@@ -132,7 +132,7 @@ inline const asmjit::CallConv& GetCallingConvention() {
     return CallConv;
 }
 
-const std::vector<Gp>& GetNonVolatileGpRegs() {
+const std::vector<Gp>& GetPlatformNonVolatileGpRegs() {
     static std::vector<Gp> Regs = [] {
         const auto& Conv = GetCallingConvention();
         std::vector<Gp> Regs {};
@@ -146,7 +146,7 @@ const std::vector<Gp>& GetNonVolatileGpRegs() {
     return Regs;
 }
 
-const std::vector<Vec>& GetNonVolatileVecRegs() {
+const std::vector<Vec>& GetPlatformNonVolatileVecRegs() {
     static std::vector<Vec> Regs = [] {
         const auto& Conv = GetCallingConvention();
         std::vector<Vec> Regs {};
@@ -158,4 +158,30 @@ const std::vector<Vec>& GetNonVolatileVecRegs() {
     }();
 
     return Regs;
+}
+
+Gp GetPlatformGpScratchReg() {
+    static Gp Reg = [] {
+        const auto& Conv = GetCallingConvention();
+        auto RegsMask = ~(Conv.preserved_regs(asmjit::RegGroup::kGp) | Conv.passed_regs(asmjit::RegGroup::kGp));
+        for (int I = 0; I < 32; ++I) {
+            if (((1 << I) & RegsMask) && I != Gp::kIdAx) return asmjit::x86::gpq(I);
+        }
+        throw std::runtime_error("Failed to find Gp scratch register for platform!");
+    }();
+
+    return Reg;
+}
+
+Vec GetPlatformXmmScratchReg() {
+    static Vec Reg = [] {
+        const auto& Conv = GetCallingConvention();
+        auto RegsMask = ~(Conv.preserved_regs(asmjit::RegGroup::kVec) | Conv.passed_regs(asmjit::RegGroup::kVec));
+        for (int I = 0; I < 32; ++I) {
+            if ((1 << I) & RegsMask) return asmjit::x86::xmm(I);
+        }
+        throw std::runtime_error("Failed to find Vec scratch register for platform!");
+    }();
+
+    return Reg;
 }

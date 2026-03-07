@@ -74,8 +74,10 @@ private:
     std::optional<std::vector<Vec>> _VecArgRegs{};
 };
 
-static const std::vector<Gp>& GetNonVolatileGpRegs();
-static const std::vector<Vec>& GetNonVolatileVecRegs();
+const std::vector<Gp>&  GetPlatformNonVolatileGpRegs();
+const std::vector<Vec>& GetPlatformNonVolatileVecRegs();
+Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
+Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
 
 // borrowed from SafetyHook
 union Xmm {
