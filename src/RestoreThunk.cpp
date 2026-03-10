@@ -132,3 +132,58 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
     return FThunkPtr { Temp };
 }
+
+FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature) {
+    asmjit::CodeHolder Code{};
+    Code.set_logger(GetLogger());
+    Code.set_error_handler(GetErrorHandler());
+    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    asmjit::x86::Compiler TheCompiler { &Code };
+
+    FuncSignature SourceSignature = FuncSignature::build<void, ArgumentContext&>();
+    auto ThisFunc = TheCompiler.add_func(SourceSignature);
+    auto ContextReg = TheCompiler.new_gp64();
+    ThisFunc->set_arg(0, ContextReg);
+    auto Context = asmjit::x86::ptr(ContextReg);
+
+    asmjit::InvokeNode* Invoker{};
+    TheCompiler.invoke(asmjit::Out(Invoker), CallTo, DestinationSignature);
+
+    // ReSharper disable once CppDFAConstantConditions
+    if (!Invoker) return nullptr;
+
+    // ReSharper disable once CppDFAUnreachableCode
+    for (auto DestArgIndex = 0; DestArgIndex < DestinationSignature.arg_count(); ++DestArgIndex) {
+        if (const auto Id = DestinationSignature.arg(DestArgIndex); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+            auto Arg = TheCompiler.new_gp64();
+            Invoker->set_arg(DestArgIndex, Arg);
+            TheCompiler.mov(Arg, Context.clone_adjusted(ArgumentContext::ArgsOffset + (DestArgIndex * ArgumentContext::ArgumentSize)));
+        }
+        else { //todo explicit float, flatten args
+            auto Arg = TheCompiler.new_xmm();
+            Invoker->set_arg(DestArgIndex, Arg);
+            TheCompiler.movq(Arg, Context.clone_adjusted(ArgumentContext::ArgsOffset + (DestArgIndex * ArgumentContext::ArgumentSize)));
+        }
+    }
+
+    if (DestinationSignature.has_ret()) {
+        if (const auto Id = DestinationSignature.ret(); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+            auto VReg = TheCompiler.new_gp64();
+            Invoker->set_ret(0, VReg);
+            TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ReturnValueOffset), VReg);
+        }
+        else {
+            auto VReg = TheCompiler.new_xmm();
+            Invoker->set_ret(0, VReg);
+            TheCompiler.movq(Context.clone_adjusted(ArgumentContext::ReturnValueOffset), VReg);
+        }
+    }
+
+    TheCompiler.ret();
+    TheCompiler.end_func();
+
+    if (TheCompiler.finalize() != asmjit::Error::kOk) return nullptr;
+    void* Temp{};
+    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
+    return FThunkPtr { Temp };
+}

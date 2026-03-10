@@ -1,4 +1,5 @@
 #pragma once
+#include <bit>
 #include <cstdint>
 #include <asmjit/asmjit.h>
 #include <asmjit/x86.h>
@@ -51,4 +52,53 @@ struct RegisterContextStack {
     static void Push(RegisterContext* Context);
     static void Pop();
     static RegisterContext* Top();
+};
+
+class ArgumentContext {
+public:
+    template<typename T>
+    T GetArgumentAs(const uint64_t Index) const {
+        return std::bit_cast<T>(_Data[Index]);
+    }
+
+    inline void SetArgument(const uint64_t Index, const uint64_t Value) {
+        _Data[Index] = Value;
+    }
+
+    template<typename T>
+    void SetArgumentByValue(const uint64_t Index, const T Value) {
+        static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!"); // todo use proper type transform later
+        _Data[Index] = std::bit_cast<uint64_t>(Value);
+    }
+
+    template<typename T>
+    void SetArgumentByReference(const uint64_t Index, const T& Value) {
+        _Data[Index] = std::bit_cast<uint64_t>(Value);
+    }
+
+    template<typename T>
+    void SetArgumentByPointer(const uint64_t Index, const T* Value) {
+        _Data[Index] = std::bit_cast<uint64_t>(Value);
+    }
+
+    [[nodiscard]] bool HasReturnValue() const noexcept { return _HasReturnValue; }
+    void SetReturnValue(const uint64_t Value) noexcept { _ReturnValue = Value; }
+
+    template<typename T>
+    void SetReturnValue(const T value) noexcept {
+        static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!"); // todo use proper type transform later
+        _ReturnValue = std::bit_cast<uint64_t>(value);
+    }
+
+    inline static constexpr uint64_t HasReturnValueOffset = 0;
+    inline static constexpr uint64_t ReturnValueOffset = 8;
+    inline static constexpr uint64_t ArgsCountOffset = 16;
+    inline static constexpr uint64_t ArgsOffset = 24;
+    inline static constexpr uint64_t ArgumentContextNonVariableSize = 24;
+    inline static constexpr uint64_t ArgumentSize = sizeof(uint64_t);
+private:
+    uint64_t _HasReturnValue{};
+    uint64_t _ReturnValue{};
+    uint64_t _ArgsCount{}; //todo add bounds checking
+    uint64_t _Data[];
 };

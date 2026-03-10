@@ -1,14 +1,14 @@
 #pragma once
 #include "Common.hpp"
+#include "Context.hpp"
 
 enum class EBindingThunkType
 {
-    Default,                     // expects the signature of ToFn to match InReturnType(BindParamType*, InArgs...) and Signature to match InReturnType(InArgs...)
+    Default,             // expects the signature of ToFn to match InReturnType(BindParamType*, InArgs...) and Signature to match InReturnType(InArgs...)
     WithRegisterContext, // expects the signature of ToFn to match InReturnType(BindParamType*, InArgs...) and Signature to match InReturnType(InArgs...)
-    WithArgumentContext          // expects the signature of ToFn to match void(BindParamType*, Context), Signature will be assigned accordingly
 };
 
-FThunkPtr GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature Signature, EBindingThunkType Type = EBindingThunkType::Default);
+FThunkPtr GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default);
 
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkPtr GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const EBindingThunkType BindingType = EBindingThunkType::Default) {
@@ -16,4 +16,11 @@ FThunkPtr GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), B
         reinterpret_cast<void*>(BindParam),
         FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
         BindingType);
+}
+
+FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature);
+
+template<typename BindParamType, typename InReturnType, typename... InArgs>
+FThunkPtr GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam) {
+    return GenerateBindingThunk(static_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
 }

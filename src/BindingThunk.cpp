@@ -9,11 +9,10 @@ FThunkPtr GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, Fun
 FThunkPtr GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest);
 FThunkPtr GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest);
 
-FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature Signature, EBindingThunkType Type) {
-    auto InvokeSignature = ShiftSignature(Signature);
-    FuncArgInfo SrcSig{Signature};
+FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type) {
+    auto InvokeSignature = ShiftSignature(SourceSignature);
+    FuncArgInfo SrcSig{SourceSignature};
     FuncArgInfo DestSig{InvokeSignature};
-
     switch (Type) {
         case EBindingThunkType::Default: {
             auto StackAllocSize = DestSig.Detail().arg_stack_size() - DestSig.Detail().red_zone_size() - DestSig.Detail().spill_zone_size();
@@ -75,28 +74,36 @@ FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, Fu
     Invoker->set_arg(0, BindParam);
 
     for (uint32_t InArgIndex = 0; InArgIndex < Src.Signature().arg_count(); ++InArgIndex) {
-        if (const auto Id = Src.Signature().arg(InArgIndex); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+        if (const auto Id = Src.Signature().arg(InArgIndex); asmjit::TypeUtils::is_int(Id)) {
             auto VReg = TheCompiler.new_gp64();
             ThisFunc->set_arg(InArgIndex, VReg);
             Invoker->set_arg(InArgIndex + 1, VReg);
         }
-        else {
+        else if (asmjit::TypeUtils::is_float(Id)) {
             auto VReg = TheCompiler.new_xmm();
             ThisFunc->set_arg(InArgIndex, VReg);
             Invoker->set_arg(InArgIndex + 1, VReg);
+        }
+        else {
+            //todo return error
+            return nullptr;
         }
     }
 
     if (Src.Signature().has_ret()) {
-        if (const auto Id = Src.Signature().ret(); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+        if (const auto Id = Src.Signature().ret(); asmjit::TypeUtils::is_int(Id)) {
             auto VReg = TheCompiler.new_gp64();
             Invoker->set_ret(0, VReg);
             TheCompiler.ret(VReg);
         }
-        else {
+        else if (asmjit::TypeUtils::is_float(Id)) {
             auto VReg = TheCompiler.new_xmm();
             Invoker->set_ret(0, VReg);
             TheCompiler.ret(VReg);
+        }
+        else {
+            //todo return error
+            return nullptr;
         }
     }
     else TheCompiler.ret();
@@ -252,6 +259,67 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
     if (TheAssembler.finalize() != Error::kOk) return nullptr;
     void* Temp{};
     if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
+    return FThunkPtr { Temp };
+}
+
+FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature) {
+    auto DestSignature = FuncSignature::build<void, void*, ArgumentContext&>();
+
+    asmjit::CodeHolder Code{};
+    Code.set_logger(GetLogger());
+    Code.set_error_handler(GetErrorHandler());
+    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    asmjit::x86::Compiler TheCompiler { &Code };
+
+    asmjit::InvokeNode* Invoker{};
+    auto* ThisFunc = TheCompiler.add_func(SourceSignature);
+
+    // Allocate and initialize structure
+    auto Context = TheCompiler.new_stack(ArgumentContext::ArgumentContextNonVariableSize + (SourceSignature.arg_count() * ArgumentContext::ArgumentSize), 1);
+    if (SourceSignature.has_ret()) TheCompiler.mov(Context.clone_adjusted(ArgumentContext::HasReturnValueOffset), 1);
+    TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ArgsCountOffset), SourceSignature.arg_count());
+
+    TheCompiler.invoke(asmjit::Out(Invoker), ToFn, DestSignature);
+
+    // ReSharper disable once CppDFAConstantConditions
+    if (!Invoker) return nullptr;
+
+    // ReSharper disable once CppDFAUnreachableCode
+    for (uint32_t InArgIndex = 0; InArgIndex < SourceSignature.arg_count(); ++InArgIndex) {
+        if (const auto Id = SourceSignature.arg(InArgIndex); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+            auto VReg = TheCompiler.new_gp64();
+            ThisFunc->set_arg(InArgIndex, VReg);
+            TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ArgsOffset + (InArgIndex * ArgumentContext::ArgumentSize)), VReg);
+        }
+        else {
+            auto VReg = TheCompiler.new_xmm();
+            ThisFunc->set_arg(InArgIndex, VReg);
+            TheCompiler.movq(Context.clone_adjusted(ArgumentContext::ArgsOffset + (InArgIndex * ArgumentContext::ArgumentSize)), VReg);
+        }
+    }
+    auto ContextRegister = TheCompiler.new_gp64();
+    TheCompiler.mov(ContextRegister, Context);
+    Invoker->set_arg(0, BindParam);
+    Invoker->set_arg(1, ContextRegister);
+
+    if (SourceSignature.has_ret()) {
+        if (const auto Id = SourceSignature.ret(); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
+            auto VReg = TheCompiler.new_gp64();
+            TheCompiler.mov(VReg, Context.clone_adjusted(ArgumentContext::ReturnValueOffset));
+            TheCompiler.ret(VReg);
+        }
+        else {
+            auto VReg = TheCompiler.new_xmm();
+            TheCompiler.movq(VReg, Context.clone_adjusted(ArgumentContext::ReturnValueOffset));
+            TheCompiler.ret(VReg);
+        }
+    }
+    else TheCompiler.ret();
+    TheCompiler.end_func();
+
+    if (TheCompiler.finalize() != asmjit::Error::kOk) return nullptr;
+    void* Temp{};
+    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
     return FThunkPtr { Temp };
 }
 
