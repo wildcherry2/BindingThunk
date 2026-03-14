@@ -9,10 +9,10 @@ FThunkPtr GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...)) {
         FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
 }
 
-FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature);
+FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe = false);
 
 template<typename InReturnType, typename... InArgs>
-FThunkPtr GenerateRestoreThunkForArgumentContext(InReturnType(*CallTo)(InArgs...)) {
+FThunkPtr GenerateRestoreThunkForArgumentContext(InReturnType(*CallTo)(InArgs...), bool bSafe = false) {
     return GenerateRestoreThunkForArgumentContext(reinterpret_cast<void*>(CallTo),
         FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
 }

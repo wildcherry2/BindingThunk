@@ -81,7 +81,7 @@ public:
         _Data[Index] = std::bit_cast<uint64_t>(Value);
     }
 
-    [[nodiscard]] bool HasReturnValue() const noexcept { return _HasReturnValue; }
+    [[nodiscard]] bool HasReturnValue() const noexcept { return _Flags & 1; }
     void SetReturnValue(const uint64_t Value) noexcept { _ReturnValue = Value; }
 
     template<typename T>
@@ -90,14 +90,14 @@ public:
         _ReturnValue = std::bit_cast<uint64_t>(value);
     }
 
-    inline static constexpr uint64_t HasReturnValueOffset = 0;
+    inline static constexpr uint64_t FlagsOffset = 0;
     inline static constexpr uint64_t ReturnValueOffset = 8;
     inline static constexpr uint64_t ArgsCountOffset = 16;
     inline static constexpr uint64_t ArgsOffset = 24;
     inline static constexpr uint64_t ArgumentContextNonVariableSize = 24;
     inline static constexpr uint64_t ArgumentSize = sizeof(uint64_t);
 private:
-    uint64_t _HasReturnValue{};
+    uint64_t _Flags{};
     uint64_t _ReturnValue{};
     uint64_t _ArgsCount{}; //todo add bounds checking
     uint64_t _Data[];

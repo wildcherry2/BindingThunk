@@ -160,6 +160,10 @@ const std::vector<Vec>& GetPlatformNonVolatileVecRegs() {
     return Regs;
 }
 
+size_t GetPlatformStackSpaceForNonVolatileRegs() {
+    return (GetPlatformNonVolatileGpRegs().size() * 8) + (GetPlatformNonVolatileVecRegs().size() * 16);
+}
+
 Gp GetPlatformGpScratchReg() {
     static Gp Reg = [] {
         const auto& Conv = GetCallingConvention();

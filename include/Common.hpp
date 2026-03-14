@@ -76,6 +76,7 @@ private:
 
 const std::vector<Gp>&  GetPlatformNonVolatileGpRegs();
 const std::vector<Vec>& GetPlatformNonVolatileVecRegs();
+size_t GetPlatformStackSpaceForNonVolatileRegs();
 Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
 Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
 

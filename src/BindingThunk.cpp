@@ -262,64 +262,135 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature) {
-    auto DestSignature = FuncSignature::build<void, void*, ArgumentContext&>();
+FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type) {
+    using namespace asmjit;
+    using namespace asmjit::x86;
 
-    asmjit::CodeHolder Code{};
+    CodeHolder Code{};
     Code.set_logger(GetLogger());
     Code.set_error_handler(GetErrorHandler());
     Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
-    asmjit::x86::Compiler TheCompiler { &Code };
+    Assembler TheAssembler { &Code };
+    auto DestInfo = FuncArgInfo{FuncSignature::build<void, void*, ArgumentContext&>()};
+    auto SrcInfo = FuncArgInfo{SourceSignature};
 
-    asmjit::InvokeNode* Invoker{};
-    auto* ThisFunc = TheCompiler.add_func(SourceSignature);
+    const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
+    auto CtxSpace = ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size());
+    if (Type == EBindingThunkType::WithRegisterContext) CtxSpace += sizeof(RegisterContext);
+    auto SumSpace = ShadowArgSpace + CtxSpace;
+    const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
+    SumSpace += Pad;
 
-    // Allocate and initialize structure
-    auto Context = TheCompiler.new_stack(ArgumentContext::ArgumentContextNonVariableSize + (SourceSignature.arg_count() * ArgumentContext::ArgumentSize), 1);
-    if (SourceSignature.has_ret()) TheCompiler.mov(Context.clone_adjusted(ArgumentContext::HasReturnValueOffset), 1);
-    TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ArgsCountOffset), SourceSignature.arg_count());
+    TheAssembler.sub(rsp, SumSpace);
+    auto GpScratchReg = GetPlatformGpScratchReg();
+    auto XmmScratchReg = GetPlatformXmmScratchReg();
+    const auto ArgContextPtr = ptr(rsp, ShadowArgSpace + Pad);
+    const auto RegContextPtr = ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size()));
+    const auto RspInitial = ArgContextPtr.clone_adjusted(CtxSpace + 8);
 
-    TheCompiler.invoke(asmjit::Out(Invoker), ToFn, DestSignature);
+    // start by saving registers at the tail end of the data part of ArgumentContext, if needed
+    if (Type == EBindingThunkType::WithRegisterContext) {
+        //todo can probably just iterate through the map
+    #define GpMov(reg) TheAssembler.mov(RegContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
+            GpMov(rax);
+            GpMov(rcx);
+            GpMov(rdx);
+            GpMov(r8);
+            GpMov(r9);
+            GpMov(r10);
+            GpMov(r11);
+            GpMov(r12);
+            GpMov(r13);
+            GpMov(r14);
+            GpMov(r15);
+            GpMov(rsi);
+            GpMov(rdi);
+            GpMov(rbx);
+    #undef GpMov
+    #define VecMov(reg) TheAssembler.movdqu(RegContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
+            VecMov(xmm0);
+            VecMov(xmm1);
+            VecMov(xmm2);
+            VecMov(xmm3);
+            VecMov(xmm4);
+            VecMov(xmm5);
+            VecMov(xmm6);
+            VecMov(xmm7);
+            VecMov(xmm8);
+            VecMov(xmm9);
+            VecMov(xmm10);
+            VecMov(xmm11);
+            VecMov(xmm12);
+            VecMov(xmm13);
+            VecMov(xmm14);
+            VecMov(xmm15);
+    #undef VecMov
+        TheAssembler.pushfq();
+        TheAssembler.pop(GpScratchReg);
+        TheAssembler.mov(RegContextPtr.clone_adjusted(offsetof(RegisterContext, rflags)), GpScratchReg);
+    }
 
-    // ReSharper disable once CppDFAConstantConditions
-    if (!Invoker) return nullptr;
-
-    // ReSharper disable once CppDFAUnreachableCode
-    for (uint32_t InArgIndex = 0; InArgIndex < SourceSignature.arg_count(); ++InArgIndex) {
-        if (const auto Id = SourceSignature.arg(InArgIndex); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
-            auto VReg = TheCompiler.new_gp64();
-            ThisFunc->set_arg(InArgIndex, VReg);
-            TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ArgsOffset + (InArgIndex * ArgumentContext::ArgumentSize)), VReg);
+    // push arguments into structure
+    for (auto Index = 0; auto& FuncValue : SrcInfo.GetArguments()) {
+        if (FuncValue.is_reg()) {
+            if (TypeUtils::is_int(FuncValue.type_id())) {
+                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), gpq(FuncValue.reg_id()));
+            }
+            else if (TypeUtils::is_float(FuncValue.type_id())) {
+                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), xmm(FuncValue.reg_id()));
+            }
+            else {
+                // todo return error
+                return nullptr;
+            }
         }
         else {
-            auto VReg = TheCompiler.new_xmm();
-            ThisFunc->set_arg(InArgIndex, VReg);
-            TheCompiler.movq(Context.clone_adjusted(ArgumentContext::ArgsOffset + (InArgIndex * ArgumentContext::ArgumentSize)), VReg);
+            if (TypeUtils::is_int(FuncValue.type_id())) {
+                TheAssembler.mov(GpScratchReg, RspInitial.clone_adjusted(FuncValue.stack_offset()));
+                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), GpScratchReg);
+            }
+            else if (TypeUtils::is_float(FuncValue.type_id())) {
+                TheAssembler.movq(XmmScratchReg, RspInitial.clone_adjusted(FuncValue.stack_offset()));
+                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), XmmScratchReg);
+            }
+            else {
+                // todo return error
+                return nullptr;
+            }
         }
     }
-    auto ContextRegister = TheCompiler.new_gp64();
-    TheCompiler.mov(ContextRegister, Context);
-    Invoker->set_arg(0, BindParam);
-    Invoker->set_arg(1, ContextRegister);
 
-    if (SourceSignature.has_ret()) {
-        if (const auto Id = SourceSignature.ret(); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
-            auto VReg = TheCompiler.new_gp64();
-            TheCompiler.mov(VReg, Context.clone_adjusted(ArgumentContext::ReturnValueOffset));
-            TheCompiler.ret(VReg);
+    // set flags if needed
+    auto Flag = (SrcInfo.GetReturnValues().empty() ? 0 : 1) | (Type == EBindingThunkType::Default ? 0 : 2);
+    if (Flag) TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), Flag);
+
+    // call function
+    TheAssembler.mov(gpq(SrcInfo.Detail().arg(0).reg_id()), BindParam);
+    TheAssembler.lea(gpq(SrcInfo.Detail().arg(1).reg_id()), ArgContextPtr);
+    TheAssembler.call(ToFn);
+
+    // if there's a return value, make sure it's in the right register. we don't support return types that take multiple registers or other weirdness
+    // todo test if asmjit figures out return type calling conventions
+    if (Flag & 1) {
+        auto& Val = SrcInfo.GetReturnValues()[0];
+        if (TypeUtils::is_int(Val.type_id())) {
+            TheAssembler.mov(gpq(Val.reg_id()), ArgContextPtr.clone_adjusted(ArgumentContext::ReturnValueOffset));
+        }
+        else if (TypeUtils::is_float(Val.type_id())) {
+            TheAssembler.movq(xmm(Val.reg_id()), ArgContextPtr.clone_adjusted(ArgumentContext::ReturnValueOffset));
         }
         else {
-            auto VReg = TheCompiler.new_xmm();
-            TheCompiler.movq(VReg, Context.clone_adjusted(ArgumentContext::ReturnValueOffset));
-            TheCompiler.ret(VReg);
+            // todo return error
+            return nullptr;
         }
     }
-    else TheCompiler.ret();
-    TheCompiler.end_func();
 
-    if (TheCompiler.finalize() != asmjit::Error::kOk) return nullptr;
+    TheAssembler.add(rsp, SumSpace);
+    TheAssembler.ret();
+
+    if (TheAssembler.finalize() != Error::kOk) return nullptr;
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
     return FThunkPtr { Temp };
 }
 

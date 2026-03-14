@@ -51,7 +51,7 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
             TheAssembler.movdqu(FltArgPtr.clone_adjusted(16 * FloatIndex++), Arg);
         }
     }
-    //TheAssembler.offset()
+
     TheAssembler.call(&RegisterContextStack::Top); // shadow space already allocated
 
     // restore context, except for arg registers
@@ -133,57 +133,122 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature) {
-    asmjit::CodeHolder Code{};
+FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe) {
+    using namespace asmjit;
+    using namespace asmjit::x86;
+
+    CodeHolder Code{};
     Code.set_logger(GetLogger());
     Code.set_error_handler(GetErrorHandler());
     Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
-    asmjit::x86::Compiler TheCompiler { &Code };
+    Assembler TheAssembler { &Code };
 
-    FuncSignature SourceSignature = FuncSignature::build<void, ArgumentContext&>();
-    auto ThisFunc = TheCompiler.add_func(SourceSignature);
-    auto ContextReg = TheCompiler.new_gp64();
-    ThisFunc->set_arg(0, ContextReg);
-    auto Context = asmjit::x86::ptr(ContextReg);
+    auto SrcInfo = FuncArgInfo{FuncSignature::build<void, ArgumentContext&>()};
+    auto DestInfo = FuncArgInfo{DestinationSignature};
+    auto GpScratchReg = GetPlatformGpScratchReg();
+    auto XmmScratchReg = GetPlatformXmmScratchReg();
 
-    asmjit::InvokeNode* Invoker{};
-    TheCompiler.invoke(asmjit::Out(Invoker), CallTo, DestinationSignature);
+    const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
+    const auto NonVolatileStackSpace = bSafe ? GetPlatformStackSpaceForNonVolatileRegs() : 0;
+    auto SumSpace = ShadowArgSpace + NonVolatileStackSpace;
+    const auto Padding = (SumSpace % 16 == 8) ? 0 : 8;
+    SumSpace += Padding;
+    const auto NVPtr = ptr(rsp, ShadowArgSpace + Padding);
+    TheAssembler.sub(rsp, SumSpace);
 
-    // ReSharper disable once CppDFAConstantConditions
-    if (!Invoker) return nullptr;
-
-    // ReSharper disable once CppDFAUnreachableCode
-    for (auto DestArgIndex = 0; DestArgIndex < DestinationSignature.arg_count(); ++DestArgIndex) {
-        if (const auto Id = DestinationSignature.arg(DestArgIndex); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
-            auto Arg = TheCompiler.new_gp64();
-            Invoker->set_arg(DestArgIndex, Arg);
-            TheCompiler.mov(Arg, Context.clone_adjusted(ArgumentContext::ArgsOffset + (DestArgIndex * ArgumentContext::ArgumentSize)));
+    // save nonvolatiles
+    if (bSafe) {
+        auto Offset = 0;
+        for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
+            TheAssembler.mov(NVPtr.clone_adjusted(Offset), PlatformNonVolatileGpReg);
+            Offset += 8;
         }
-        else { //todo explicit float, flatten args
-            auto Arg = TheCompiler.new_xmm();
-            Invoker->set_arg(DestArgIndex, Arg);
-            TheCompiler.movq(Arg, Context.clone_adjusted(ArgumentContext::ArgsOffset + (DestArgIndex * ArgumentContext::ArgumentSize)));
+        for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
+            TheAssembler.movdqu(NVPtr.clone_adjusted(Offset), PlatformNonVolatileVecReg);
+            Offset += 16;
         }
     }
 
-    if (DestinationSignature.has_ret()) {
-        if (const auto Id = DestinationSignature.ret(); Id >= asmjit::TypeId::_kIntStart && Id <= asmjit::TypeId::_kIntEnd) {
-            auto VReg = TheCompiler.new_gp64();
-            Invoker->set_ret(0, VReg);
-            TheCompiler.mov(Context.clone_adjusted(ArgumentContext::ReturnValueOffset), VReg);
+    const auto ContextReg = SrcInfo.GetArgumentIntegralRegisters()[0];
+    const auto ContextPtr = ptr(ContextReg);
+    const auto ArgContextPtr = ContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize);
+
+    // move arguments from context to call position, excluding ContextReg
+    for (auto Index = 0; auto& FuncValue : DestInfo.GetArguments()) {
+        if (FuncValue.is_reg()) {
+            if (TypeUtils::is_int(FuncValue.type_id())) {
+                auto reg = gpq(FuncValue.reg_id());
+                if (reg == ContextReg) continue;
+                TheAssembler.mov(reg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+            }
+            else if (TypeUtils::is_float(FuncValue.type_id())) {
+                TheAssembler.movq(xmm(FuncValue.reg_id()), ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+            }
+            else {
+                // todo return error
+                return nullptr;
+            }
         }
         else {
-            auto VReg = TheCompiler.new_xmm();
-            Invoker->set_ret(0, VReg);
-            TheCompiler.movq(Context.clone_adjusted(ArgumentContext::ReturnValueOffset), VReg);
+            if (TypeUtils::is_int(FuncValue.type_id())) {
+                TheAssembler.mov(GpScratchReg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                TheAssembler.mov(ptr(rsp, FuncValue.stack_offset()), GpScratchReg);
+            }
+            else if (TypeUtils::is_float(FuncValue.type_id())) {
+                TheAssembler.movq(XmmScratchReg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                TheAssembler.movq(ptr(rsp, FuncValue.stack_offset()), XmmScratchReg);
+            }
+            else {
+                // todo return error
+                return nullptr;
+            }
         }
     }
 
-    TheCompiler.ret();
-    TheCompiler.end_func();
+    if (bSafe) {
+        const auto RegPtr = ArgContextPtr.clone_adjusted(DestInfo.GetArguments().size() * ArgumentContext::ArgumentSize);
+        TheAssembler.mov(GpScratchReg, RegPtr.clone_adjusted(offsetof(RegisterContext, rflags)));
+        TheAssembler.push(GpScratchReg);
+        TheAssembler.popfq();
 
-    if (TheCompiler.finalize() != asmjit::Error::kOk) return nullptr;
+        // restore all saved registers that aren't args
+        const auto GpMask = DestInfo.GpRegMask();
+        const auto VecMask = DestInfo.VecRegMask();
+        for (auto& [Register, Offset] : RegisterContextOffsets) {
+            if (Register.is_gp()) {
+                if ((1 << Register.id()) & GpMask) continue; // register is an integral arg, skip since we'll restore from the argument array
+                auto AsGp = Register.as<Gp>();
+                if (AsGp == ContextReg) continue; // we don't want to overwrite context reg until we're done with it
+                TheAssembler.mov(AsGp, RegPtr.clone_adjusted(Offset)); // register is not an arg, restore it
+            }
+            else if (Register.is_vec()) {
+                if ((1 << Register.id()) & VecMask) continue; // register is a floating arg, skip since we'll restore from the argument array
+                TheAssembler.movdqu(Register.as<Vec>(), RegPtr.clone_adjusted(Offset)); // register is not an arg, restore it
+            }
+        }
+    }
+
+    // make the call
+    TheAssembler.call(CallTo);
+
+    // restore nonvolatile registers if needed
+    if (bSafe) {
+        auto Offset = 0;
+        for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
+            TheAssembler.mov(PlatformNonVolatileGpReg, NVPtr.clone_adjusted(Offset));
+            Offset += 8;
+        }
+        for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
+            TheAssembler.movdqu(PlatformNonVolatileVecReg, NVPtr.clone_adjusted(Offset));
+            Offset += 16;
+        }
+    }
+
+    TheAssembler.add(rsp, SumSpace);
+    TheAssembler.ret();
+
+    if (TheAssembler.finalize() != Error::kOk) return nullptr;
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
     return FThunkPtr { Temp };
 }

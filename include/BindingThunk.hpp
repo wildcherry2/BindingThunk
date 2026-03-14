@@ -4,8 +4,8 @@
 
 enum class EBindingThunkType
 {
-    Default,             // expects the signature of ToFn to match InReturnType(BindParamType*, InArgs...) and Signature to match InReturnType(InArgs...)
-    WithRegisterContext, // expects the signature of ToFn to match InReturnType(BindParamType*, InArgs...) and Signature to match InReturnType(InArgs...)
+    Default,
+    WithRegisterContext,
 };
 
 FThunkPtr GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default);
@@ -18,9 +18,9 @@ FThunkPtr GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), B
         BindingType);
 }
 
-FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature);
+FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default);
 
 template<typename BindParamType, typename InReturnType, typename... InArgs>
-FThunkPtr GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam) {
-    return GenerateBindingThunk(static_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
+FThunkPtr GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Default) {
+    return GenerateBindingThunk(static_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(), Type);
 }
