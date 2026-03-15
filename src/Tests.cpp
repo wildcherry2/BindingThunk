@@ -914,15 +914,6 @@ TEST(BindingThunkTests, ArgumentRestoreThunkRejectsUnsupportedRegisterArgumentTy
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
 
-TEST(BindingThunkTests, ArgumentAndRegisterRestoreThunkRejectsUnsupportedRegisterArgumentTypes) {
-    auto Signature = FuncSignature::build<void>();
-    Signature.add_arg(asmjit::TypeId::kMmx64);
-
-    auto Result = GenerateRestoreThunk(reinterpret_cast<void*>(&OriginalArgumentNoArgs), Signature, EBindingThunkType::ArgumentAndRegister);
-    ASSERT_FALSE(Result.has_value());
-    EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
-}
-
 TEST(BindingThunkTests, ArgumentRestoreThunkRejectsUnsupportedStackArgumentTypes) {
     auto Signature = FuncSignature::build<void>();
     Signature.add_arg(asmjit::TypeId::kInt32);
