@@ -38,6 +38,8 @@ static void ThrowingRegisterContextStackFatalHandler(const char* Message) {
 static std::unique_ptr<std::byte[]> MakeArgumentContextStorage(const size_t ArgumentsCount) {
     auto Storage = std::make_unique<std::byte[]>(ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * ArgumentsCount));
     std::memset(Storage.get(), 0, ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * ArgumentsCount));
+    const auto ArgumentsCountValue = static_cast<uint64_t>(ArgumentsCount);
+    std::memcpy(Storage.get() + ArgumentContext::ArgsCountOffset, &ArgumentsCountValue, sizeof(ArgumentsCountValue));
     return Storage;
 }
 
@@ -50,6 +52,48 @@ static T ReadArgumentContextField(const ArgumentContext& Context, const uint64_t
     auto Raw = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(&Context) + Offset);
     return std::bit_cast<T>(Raw);
 }
+
+template<typename T>
+static void WriteArgumentContextField(ArgumentContext& Context, const uint64_t Offset, const T& Value) {
+    static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!");
+    uint64_t Raw{};
+    std::memcpy(&Raw, &Value, sizeof(T));
+    std::memcpy(reinterpret_cast<std::byte*>(&Context) + Offset, &Raw, sizeof(Raw));
+}
+
+static std::string NarrowForTest(const std::wstring_view Message) {
+    std::string Narrow{};
+    Narrow.reserve(Message.size());
+    for (const auto Character : Message) {
+        Narrow.push_back(static_cast<char>(Character));
+    }
+    return Narrow;
+}
+
+static std::ostream& operator<<(std::ostream& Stream, const std::wstring& Message) {
+    Stream << NarrowForTest(Message);
+    return Stream;
+}
+
+template<typename T>
+static T GetArgumentValueOrFail(const ArgumentContext& Context, const uint64_t Index) {
+    const auto Result = Context.GetArgumentAs<T>(Index);
+    EXPECT_TRUE(Result.has_value());
+    if (!Result.has_value()) {
+        return T {};
+    }
+    return Result.value();
+}
+
+struct FScopedLogFunctionOverride {
+    LogFn LogFunction = GetLogFunction();
+    LogFn ErrorLogFunction = GetErrorLogFunction();
+
+    ~FScopedLogFunctionOverride() {
+        SetLogFunction(std::move(LogFunction));
+        SetErrorLogFunction(std::move(ErrorLogFunction));
+    }
+};
 
 #if defined(_WIN64)
 static PRUNTIME_FUNCTION LookupThunkRuntimeFunction(const void* Thunk) {
@@ -307,9 +351,9 @@ static void ArgumentSmallCallback(ArgumentSmallBinder* Binder, ArgumentContext& 
     Binder->hasRegisterContext = Context.HasRegisterContext();
     Binder->hasReturnValue = Context.HasReturnValue();
     Binder->argsCount = Context.GetArgumentsCount();
-    Binder->value = static_cast<int>(Context.GetArgumentAs<uint64_t>(0));
-    Binder->referenced = *Context.GetArgumentAs<int*>(1);
-    Binder->pointed = *Context.GetArgumentAs<int*>(2);
+    Binder->value = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
+    Binder->referenced = *GetArgumentValueOrFail<int*>(Context, 1);
+    Binder->pointed = *GetArgumentValueOrFail<int*>(Context, 2);
     Context.SetReturnValue(ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context));
 }
 
@@ -352,12 +396,12 @@ static void ArgumentRegisterLargeCallback(ArgumentRegisterLargeBinder* Binder, A
     Binder->hasRegisterContext = Context.HasRegisterContext();
     Binder->hasReturnValue = Context.HasReturnValue();
     Binder->argsCount = Context.GetArgumentsCount();
-    Binder->value = static_cast<int>(Context.GetArgumentAs<uint64_t>(0));
-    Binder->referenced = *Context.GetArgumentAs<int*>(1);
-    Binder->pointed = *Context.GetArgumentAs<int*>(2);
-    Binder->floatingValue = Context.GetArgumentAs<double>(3);
-    Binder->floatingReferenced = *Context.GetArgumentAs<double*>(4);
-    Binder->floatingPointed = *Context.GetArgumentAs<double*>(5);
+    Binder->value = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
+    Binder->referenced = *GetArgumentValueOrFail<int*>(Context, 1);
+    Binder->pointed = *GetArgumentValueOrFail<int*>(Context, 2);
+    Binder->floatingValue = GetArgumentValueOrFail<double>(Context, 3);
+    Binder->floatingReferenced = *GetArgumentValueOrFail<double*>(Context, 4);
+    Binder->floatingPointed = *GetArgumentValueOrFail<double*>(Context, 5);
     Context.SetReturnValue(ThunkCast<int*(*)(ArgumentContext&)>(GRestoreThunk)(Context));
 }
 
@@ -387,11 +431,11 @@ static float OriginalArgumentFloatStack(int A, int B, int C, int D, float E) {
 
 static void ArgumentFloatStackCallback(ArgumentFloatStackBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
-    Binder->a = static_cast<int>(Context.GetArgumentAs<uint64_t>(0));
-    Binder->b = static_cast<int>(Context.GetArgumentAs<uint64_t>(1));
-    Binder->c = static_cast<int>(Context.GetArgumentAs<uint64_t>(2));
-    Binder->d = static_cast<int>(Context.GetArgumentAs<uint64_t>(3));
-    Binder->e = std::bit_cast<float>(static_cast<uint32_t>(Context.GetArgumentAs<uint64_t>(4)));
+    Binder->a = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
+    Binder->b = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 1));
+    Binder->c = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 2));
+    Binder->d = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 3));
+    Binder->e = std::bit_cast<float>(static_cast<uint32_t>(GetArgumentValueOrFail<uint64_t>(Context, 4)));
 
     const auto ReturnValue = ThunkCast<float(*)(ArgumentContext&)>(GRestoreThunk)(Context);
     Context.SetReturnValue(static_cast<uint64_t>(std::bit_cast<uint32_t>(ReturnValue)));
@@ -411,50 +455,68 @@ TEST(BindingThunkTests, DefaultNoArgsScalarReturn) {
     EXPECT_EQ(Binder.calls, 1);
 }
 
-TEST(ContextTests, SetArgumentStoresRawBits) {
+TEST(ContextTests, GetArgumentAsReadsRawBits) {
     auto Storage = MakeArgumentContextStorage(1);
     auto& Context = GetArgumentContext(Storage);
 
-    Context.SetArgument(0, 0x123456789abcdef0ULL);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, 0x123456789abcdef0ULL);
 
-    EXPECT_EQ(Context.GetArgumentAs<uint64_t>(0), 0x123456789abcdef0ULL);
+    const auto Result = Context.GetArgumentAs<uint64_t>(0);
+    ASSERT_TRUE(Result.has_value());
+    EXPECT_EQ(Result.value(), 0x123456789abcdef0ULL);
 }
 
-TEST(ContextTests, SetArgumentByValueSupportsQualifiedScalarTypes) {
+TEST(ContextTests, GetArgumentAsSupportsQualifiedScalarTypes) {
     auto Storage = MakeArgumentContextStorage(1);
     auto& Context = GetArgumentContext(Storage);
     const double Value = 6.25;
 
-    Context.SetArgumentByValue<const double>(0, Value);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, Value);
 
-    EXPECT_DOUBLE_EQ(Context.GetArgumentAs<double>(0), 6.25);
+    const auto Result = Context.GetArgumentAs<double>(0);
+    ASSERT_TRUE(Result.has_value());
+    EXPECT_DOUBLE_EQ(Result.value(), 6.25);
 }
 
-TEST(ContextTests, SetArgumentByReferenceStoresReferencedScalarAndPointerValues) {
+TEST(ContextTests, GetArgumentAsReadsScalarAndPointerArgumentsFromRawStorage) {
     auto Storage = MakeArgumentContextStorage(2);
     auto& Context = GetArgumentContext(Storage);
     int64_t Scalar = 44;
-    const int64_t& ScalarReference = Scalar;
     int Pointed = 17;
     int* Pointer = &Pointed;
-    int* const& PointerReference = Pointer;
 
-    Context.SetArgumentByReference(0, ScalarReference);
-    Context.SetArgumentByReference(1, PointerReference);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, Scalar);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + ArgumentContext::ArgumentSize, Pointer);
 
-    EXPECT_EQ(Context.GetArgumentAs<int64_t>(0), 44);
-    EXPECT_EQ(Context.GetArgumentAs<int*>(1), &Pointed);
+    const auto ScalarResult = Context.GetArgumentAs<int64_t>(0);
+    const auto PointerResult = Context.GetArgumentAs<int*>(1);
+    ASSERT_TRUE(ScalarResult.has_value());
+    ASSERT_TRUE(PointerResult.has_value());
+    EXPECT_EQ(ScalarResult.value(), 44);
+    EXPECT_EQ(PointerResult.value(), &Pointed);
 }
 
-TEST(ContextTests, SetArgumentByPointerPreservesPointerQualifiers) {
+TEST(ContextTests, GetArgumentAsPreservesPointerQualifiers) {
     auto Storage = MakeArgumentContextStorage(1);
     auto& Context = GetArgumentContext(Storage);
     volatile int64_t Value = 91;
     const volatile int64_t* Pointer = &Value;
 
-    Context.SetArgumentByPointer(0, Pointer);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, Pointer);
 
-    EXPECT_EQ(Context.GetArgumentAs<const volatile int64_t*>(0), Pointer);
+    const auto Result = Context.GetArgumentAs<const volatile int64_t*>(0);
+    ASSERT_TRUE(Result.has_value());
+    EXPECT_EQ(Result.value(), Pointer);
+}
+
+TEST(ContextTests, GetArgumentAsReturnsOutOfBoundsErrorForInvalidIndex) {
+    auto Storage = MakeArgumentContextStorage(1);
+    auto& Context = GetArgumentContext(Storage);
+
+    const auto Result = Context.GetArgumentAs<uint64_t>(1);
+
+    ASSERT_FALSE(Result.has_value());
+    EXPECT_EQ(Result.error(), EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex);
 }
 
 TEST(ContextTests, SetReturnValueSupportsRawAndTypedWrites) {
@@ -518,9 +580,9 @@ TEST(ContextTests, RegisterContextStackOverflowInvokesFatalHandler) {
 }
 
 TEST(CommonTests, GetLoggerIsStableAndInitializeCodeHolderUsesIt) {
-    auto* Logger = GetLogger();
+    auto* Logger = GetAsmJitLogger();
     ASSERT_NE(Logger, nullptr);
-    EXPECT_EQ(GetLogger(), Logger);
+    EXPECT_EQ(GetAsmJitLogger(), Logger);
 
     CodeHolder CodeWithLogger{};
     InitializeCodeHolder(CodeWithLogger, true);
@@ -531,14 +593,52 @@ TEST(CommonTests, GetLoggerIsStableAndInitializeCodeHolderUsesIt) {
     EXPECT_EQ(CodeWithoutLogger.logger(), nullptr);
 }
 
+TEST(CommonTests, SetLogFunctionOverridesGetterAndAsmJitLoggerOutput) {
+    FScopedLogFunctionOverride Scope {};
+    std::wstring Captured{};
+
+    SetLogFunction([&Captured](const std::wstring_view Message) {
+        Captured.append(Message);
+    });
+
+    const auto Logger = GetLogFunction();
+    ASSERT_TRUE(static_cast<bool>(Logger));
+    Logger(L"manual-log-line");
+    EXPECT_EQ(Captured, L"manual-log-line");
+
+    Captured.clear();
+    constexpr char Message[] = "jit-log-line";
+    EXPECT_EQ(GetAsmJitLogger()->log(Message, sizeof(Message) - 1), asmjit::kErrorOk);
+    EXPECT_EQ(Captured, L"jit-log-line");
+}
+
+TEST(CommonTests, SetErrorLogFunctionOverridesGetterAndAsmJitErrorHandlerOutput) {
+    FScopedLogFunctionOverride Scope {};
+    std::wstring Captured{};
+
+    SetErrorLogFunction([&Captured](const std::wstring_view Message) {
+        Captured.append(Message);
+    });
+
+    const auto Logger = GetErrorLogFunction();
+    ASSERT_TRUE(static_cast<bool>(Logger));
+    Logger(L"manual-error-line");
+    EXPECT_EQ(Captured, L"manual-error-line");
+
+    Captured.clear();
+    GetAsmJitErrorHandler()->handle_error(asmjit::Error::kInvalidState, "jit-error-line", nullptr);
+    EXPECT_NE(Captured.find(L"AsmJit error "), std::wstring::npos);
+    EXPECT_NE(Captured.find(L"jit-error-line"), std::wstring::npos);
+}
+
 TEST(CommonTests, GetLoggerWritesToStdout) {
     testing::internal::CaptureStdout();
     constexpr char Message[] = "jit-log-line";
-    auto Error = GetLogger()->log(Message, sizeof(Message) - 1);
+    auto Error = GetAsmJitLogger()->log(Message, sizeof(Message) - 1);
     auto Output = testing::internal::GetCapturedStdout();
 
     EXPECT_EQ(Error, asmjit::kErrorOk);
-    EXPECT_EQ(Output, "jit-log-line");
+    EXPECT_EQ(Output, "jit-log-line\n");
 }
 
 int main(int argc, char** argv) {

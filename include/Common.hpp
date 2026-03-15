@@ -4,9 +4,11 @@
 #include <type_traits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <optional>
 #include <cstddef>
+#include <functional>
 
 namespace RC::Thunk {
 
@@ -22,7 +24,7 @@ using asmjit::FuncDetail;
 using asmjit::x86::Assembler;
 
 template<typename T>
-    struct AsmJitCompatibleArgStr
+struct AsmJitCompatibleArgStr
 {
     using Type = std::conditional_t<std::is_class_v<T> || std::is_aggregate_v<T>,
         std::conditional_t<sizeof(T) <= 8, uint64_t, void*>,
@@ -44,6 +46,7 @@ struct FThunkDeleter
 };
 
 using FThunkPtr = std::unique_ptr<void, FThunkDeleter>;
+using LogFn = std::function<void(std::wstring_view)>;
 
 enum class EThunkErrorCode {
     InvalidBindingType,
@@ -56,11 +59,12 @@ enum class EThunkErrorCode {
     AssemblerFinalizeFailed,
     JitAddFailed,
     WindowsUnwindRegistrationFailed,
+    ArgumentContextOutOfBoundsArgumentIndex,
 };
 
 struct FThunkError {
     EThunkErrorCode Code{};
-    std::string Message{};
+    std::wstring Message{};
 };
 
 using FThunkResult = std::expected<FThunkPtr, FThunkError>;
@@ -114,9 +118,17 @@ union Xmm {
 };
 
 auto GetJitRuntime() -> JitRuntime&;
+std::wstring WideFromUtf8(std::string_view Message);
+inline FThunkError MakeThunkError(const EThunkErrorCode Code, const std::string_view Message) {
+    return FThunkError { Code, WideFromUtf8(Message) };
+}
 void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
-auto GetErrorHandler() -> ErrorHandler*;
-auto GetLogger() -> Logger*;
+auto GetAsmJitErrorHandler() -> ErrorHandler*;
+auto GetAsmJitLogger() -> Logger*;
+auto GetLogFunction() -> LogFn;
+auto GetErrorLogFunction() -> LogFn;
+auto SetLogFunction(LogFn fn) -> void;
+auto SetErrorLogFunction(LogFn fn) -> void;
 
 struct FManualThunkFramePlan {
     std::vector<Gp> PushedGpRegs{};

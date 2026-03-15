@@ -26,13 +26,13 @@ int main() {
     void* binder = (void*)0x42;
     auto bindResult = GenerateBindingThunk(testcomplexfn, binder, EBindingThunkType::Register);
     if (!bindResult) {
-        std::cerr << bindResult.error().Message << std::endl;
+        std::wcerr << bindResult.error().Message << std::endl;
         return 1;
     }
 
     auto restoreResult = GenerateRestoreThunk(testcomplexfnoriginal, EBindingThunkType::Register);
     if (!restoreResult) {
-        std::cerr << restoreResult.error().Message << std::endl;
+        std::wcerr << restoreResult.error().Message << std::endl;
         return 1;
     }
 

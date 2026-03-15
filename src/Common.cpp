@@ -5,6 +5,7 @@
 #include <iostream>
 #include <format>
 #include <algorithm>
+#include <codecvt>
 #include <cstdlib>
 #include <mutex>
 
@@ -20,14 +21,35 @@
 
 namespace RC::Thunk {
 
-static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
-    return FThunkError { Code, std::move(Message) };
+std::wstring WideFromUtf8(const std::string_view Message) {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> Converter;
+    return Converter.from_bytes(Message.data(), Message.data() + Message.size());
 }
 
 static uint32_t AlignThunkStackAllocation(const uint32_t RawStackAllocation, const uint32_t PushBytes) {
     const auto Misalignment = (PushBytes + RawStackAllocation) % 16;
     return RawStackAllocation + ((8 + 16 - Misalignment) % 16);
 }
+
+LogFn StandardLogger = [](const std::wstring_view Message) {
+    if (Message.empty()) return;
+    if (Message.ends_with(L"\n")) {
+        std::wcout << Message;
+        std::wcout.flush();
+        return;
+    }
+    std::wcout << Message << std::endl;
+};
+
+LogFn ErrorLogger = [](const std::wstring_view Message) {
+    if (Message.empty()) return;
+    if (Message.ends_with(L"\n")) {
+        std::wcerr << Message;
+        std::wcerr.flush();
+        return;
+    }
+    std::wcerr << Message << std::endl;
+};
 
 #if defined(_WIN64)
 enum : uint8_t {
@@ -257,41 +279,56 @@ auto GetJitRuntime()-> JitRuntime&
 }
 
 void InitializeCodeHolder(CodeHolder& Code, const bool bLogAssembly) {
-    Code.set_logger(bLogAssembly ? GetLogger() : nullptr);
-    Code.set_error_handler(GetErrorHandler());
+    Code.set_logger(bLogAssembly ? GetAsmJitLogger() : nullptr);
+    Code.set_error_handler(GetAsmJitErrorHandler());
     Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
 }
 
-class UE4SSJitErrorHandler : public ErrorHandler
+class AsmJitErrorHandler : public ErrorHandler
 {
-    public: ~UE4SSJitErrorHandler() noexcept override = default;
+    public: ~AsmJitErrorHandler() noexcept override = default;
 
     void handle_error(asmjit::Error err, const char *message, asmjit::BaseEmitter *origin) override {
-        std::cerr << std::format("AsmJit error {}: {}", static_cast<uint32_t>(err), message) << std::endl;
+        auto formatted = std::format("AsmJit error {}: {}", static_cast<uint32_t>(err), message);
+        ErrorLogger(WideFromUtf8(formatted));
     }
 };
 
-class UE4SSJitLogger : public asmjit::Logger
+class AsmJitLogger : public Logger
 {
-    public: ~UE4SSJitLogger() noexcept override = default;
+    public: ~AsmJitLogger() noexcept override = default;
 
     asmjit::Error _log(const char* data, size_t size) noexcept override
     {
-        std::string_view AsStringView{ data, size };
-        std::cout << AsStringView;
-        std::cout.flush();
+        StandardLogger(WideFromUtf8(std::string_view { data, size }));
         return asmjit::kErrorOk;
     }
 };
 
-auto GetErrorHandler()-> ErrorHandler* {
-    static UE4SSJitErrorHandler JitErrorHandler{};
+auto GetAsmJitErrorHandler()-> ErrorHandler* {
+    static AsmJitErrorHandler JitErrorHandler{};
     return &JitErrorHandler;
 }
 
-auto GetLogger()-> Logger* {
-    static UE4SSJitLogger JitLogger{};
+auto GetAsmJitLogger()-> Logger* {
+    static AsmJitLogger JitLogger{};
     return &JitLogger;
+}
+
+auto GetLogFunction() -> LogFn {
+    return StandardLogger;
+}
+
+auto GetErrorLogFunction() -> LogFn {
+    return ErrorLogger;
+}
+
+auto SetLogFunction(LogFn fn) -> void {
+    StandardLogger = std::move(fn);
+}
+
+auto SetErrorLogFunction(LogFn fn) -> void {
+    ErrorLogger = std::move(fn);
 }
 
 void FThunkDeleter::operator()(void* Thunk) const noexcept

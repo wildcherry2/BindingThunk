@@ -3,10 +3,6 @@
 
 namespace RC::Thunk {
 
-static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
-    return FThunkError { Code, std::move(Message) };
-}
-
 static FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
 static FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);
 

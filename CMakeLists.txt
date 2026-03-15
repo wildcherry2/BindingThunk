@@ -35,6 +35,8 @@ add_library(Thunk STATIC ${THUNK_PUBLIC_HEADERS} ${THUNK_SOURCES})
 target_include_directories(Thunk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(Thunk PUBLIC asmjit)
 
+add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
+
 option(THUNK_BUILD_EXAMPLE "Build the example executable" OFF)
 if (THUNK_BUILD_EXAMPLE)
     add_executable(ThunkExample src/main.cpp)

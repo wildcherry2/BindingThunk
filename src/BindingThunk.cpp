@@ -1,13 +1,8 @@
 #include "BindingThunk.hpp"
 #include "Context.hpp"
-#include <string>
 #include <vector>
 
 namespace RC::Thunk {
-
-static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
-    return FThunkError { Code, std::move(Message) };
-}
 
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgsOffset + (ArgumentContext::ArgumentSize * Index));
