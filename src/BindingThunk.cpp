@@ -1,8 +1,11 @@
 #include "BindingThunk.hpp"
 #include "Context.hpp"
-#include <stdexcept>
 #include <string>
 #include <vector>
+
+static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
+    return FThunkError { Code, std::move(Message) };
+}
 
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgsOffset + (ArgumentContext::ArgumentSize * Index));
@@ -28,11 +31,11 @@ static void SaveRegisterContext(asmjit::x86::Assembler& TheAssembler, const asmj
 }
 
 FuncSignature ShiftSignature(const FuncSignature& InSignature);
-FThunkPtr GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-FThunkPtr GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-FThunkPtr GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 
-FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     auto InvokeSignature = ShiftSignature(SourceSignature);
     FuncArgInfo SrcSig{SourceSignature};
     FuncArgInfo DestSig{InvokeSignature};
@@ -46,15 +49,17 @@ FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature Source
         }
         case EBindingThunkType::Argument:
         case EBindingThunkType::ArgumentAndRegister:
-            throw std::invalid_argument("Argument binding thunks require a callback that takes ArgumentContext&.");
+            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Argument binding thunks require a callback that takes ArgumentContext&."));
         default: {
-            return nullptr;
+            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
         }
     }
 }
 
-FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
-    if (Src.Signature().arg_count() >= Dest.Signature().arg_count()) throw std::runtime_error("GenerateSimpleShift Src arg count is >= Dest arg count!");
+FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
+    if (Src.Signature().arg_count() >= Dest.Signature().arg_count()) {
+        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidSignature, "GenerateSimpleShift source arg count is >= destination arg count."));
+    }
 
     asmjit::CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
@@ -63,7 +68,9 @@ FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, Fun
     for (int32_t ArgIndex = Src.GetArguments().size() - 1; ArgIndex >= 0; --ArgIndex) {
         const auto& SrcValue = Src.GetArguments()[ArgIndex];
         const auto& DestValue = Dest.GetArguments()[ArgIndex + 1];
-        if (SrcValue.type_id() != DestValue.type_id()) throw std::runtime_error("Malformed Dest value at index " + std::to_string(ArgIndex) + " in GenerateSimpleShift!");
+        if (SrcValue.type_id() != DestValue.type_id()) {
+            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidSignature, "Malformed destination value at index " + std::to_string(ArgIndex) + " in GenerateSimpleShift."));
+        }
         if (SrcValue.reg_type() >= asmjit::RegType::kGp8Lo && SrcValue.reg_type() <= asmjit::RegType::kGp64) {
             TheAssembler.mov(asmjit::x86::gpq(DestValue.reg_id()), asmjit::x86::gpq(SrcValue.reg_id()));
         }
@@ -74,13 +81,13 @@ FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, Fun
 
     TheAssembler.mov(asmjit::x86::gpq(Dest.GetArguments()[0].reg_id()), BindParam);
     TheAssembler.jmp(ToFn);
-    if (TheAssembler.finalize() != asmjit::Error::kOk) return nullptr;
+    if (TheAssembler.finalize() != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize simple binding thunk assembler."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add simple binding thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
+FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     asmjit::CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     asmjit::x86::Compiler TheCompiler { &Code };
@@ -90,7 +97,7 @@ FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, Fu
     TheCompiler.invoke(asmjit::Out(Invoker), ToFn, Dest.Signature());
 
     // ReSharper disable once CppDFAConstantConditions
-    if (!Invoker) return nullptr;
+    if (!Invoker) return std::unexpected(MakeThunkError(EThunkErrorCode::InvokeCreationFailed, "Failed to create invoke node for complex binding thunk."));
 
     // ReSharper disable once CppDFAUnreachableCode
     Invoker->set_arg(0, BindParam);
@@ -107,8 +114,7 @@ FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, Fu
             Invoker->set_arg(InArgIndex + 1, VReg);
         }
         else {
-            //todo return error
-            return nullptr;
+            return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Complex binding thunk encountered an unsupported argument type."));
         }
     }
 
@@ -124,20 +130,19 @@ FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, Fu
             TheCompiler.ret(VReg);
         }
         else {
-            //todo return error
-            return nullptr;
+            return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Complex binding thunk encountered an unsupported return type."));
         }
     }
     else TheCompiler.ret();
     TheCompiler.end_func();
 
-    if (TheCompiler.finalize() != asmjit::Error::kOk) return nullptr;
+    if (TheCompiler.finalize() != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize complex binding thunk compiler output."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add complex binding thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
+FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
@@ -210,9 +215,6 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
                     TheAssembler.movdqu(ContextPtr.clone_adjusted(RegisterContextOffsets[Register]), Register);
                 }
             }
-            else if (RetArg.is_stack()) {
-                throw std::runtime_error("Thunks don't support returning by stack!");
-            }
         }
     }
 
@@ -231,22 +233,19 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
                     TheAssembler.movdqu(Register, ContextPtr.clone_adjusted(RegisterContextOffsets[Register]));
                 }
             }
-            else if (RetArg.is_stack()) {
-                throw std::runtime_error("Thunks don't support returning by stack!");
-            }
         }
     }
 
     TheAssembler.add(rsp, SumSpace);
     TheAssembler.ret();
 
-    if (TheAssembler.finalize() != Error::kOk) return nullptr;
+    if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize register binding thunk assembler."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add register binding thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
@@ -258,7 +257,7 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
 
     const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
     if (Type != EBindingThunkType::Argument && Type != EBindingThunkType::ArgumentAndRegister) {
-        throw std::invalid_argument("ArgumentContext binding callbacks require Argument or ArgumentAndRegister binding types.");
+        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "ArgumentContext binding callbacks require Argument or ArgumentAndRegister binding types."));
     }
 
     auto CtxSpace = ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size());
@@ -294,8 +293,7 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
                 TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentOffset), xmm(FuncValue.reg_id()));
             }
             else {
-                // todo return error
-                return nullptr;
+                return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument binding thunk encountered an unsupported argument register type."));
             }
         }
         else {
@@ -308,8 +306,7 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
                 TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentOffset), XmmScratchReg);
             }
             else {
-                // todo return error
-                return nullptr;
+                return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument binding thunk encountered an unsupported stack argument type."));
             }
         }
     }
@@ -335,17 +332,16 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
             TheAssembler.movq(xmm(Val.reg_id()), ArgContextPtr.clone_adjusted(ArgumentContext::ReturnValueOffset));
         }
         else {
-            // todo return error
-            return nullptr;
+            return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument binding thunk encountered an unsupported return type."));
         }
     }
 
     TheAssembler.add(rsp, SumSpace);
     TheAssembler.ret();
 
-    if (TheAssembler.finalize() != Error::kOk) return nullptr;
+    if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize argument binding thunk assembler."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add argument binding thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }
 

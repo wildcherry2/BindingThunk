@@ -1,7 +1,9 @@
 #pragma once
 #include <asmjit/x86.h>
+#include <expected>
 #include <type_traits>
 #include <memory>
+#include <string>
 #include <vector>
 #include <optional>
 
@@ -39,6 +41,25 @@ struct FThunkDeleter
 };
 
 using FThunkPtr = std::unique_ptr<void, FThunkDeleter>;
+
+enum class EThunkErrorCode {
+    InvalidBindingType,
+    InvalidSignature,
+    UnsupportedType,
+    UnsupportedReturnStorage,
+    RegisterContextStackOverflow,
+    RegisterContextStackUnderflow,
+    InvokeCreationFailed,
+    AssemblerFinalizeFailed,
+    JitAddFailed,
+};
+
+struct FThunkError {
+    EThunkErrorCode Code{};
+    std::string Message{};
+};
+
+using FThunkResult = std::expected<FThunkPtr, FThunkError>;
 
 class FuncArgInfo
 {

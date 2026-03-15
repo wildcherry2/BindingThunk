@@ -3,10 +3,10 @@
 #include "BindingThunk.hpp"
 
 // Restore thunks are only valid for non-default binding modes.
-FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, bool bLogAssembly = false);
+FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, bool bLogAssembly = false);
 
 template<typename InReturnType, typename... InArgs>
-FThunkPtr GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThunkType BindingType, const bool bLogAssembly = false) {
+FThunkResult GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThunkType BindingType, const bool bLogAssembly = false) {
     return GenerateRestoreThunk(reinterpret_cast<void*>(CallTo),
         FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
         BindingType,

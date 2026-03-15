@@ -19,33 +19,3 @@ struct std::hash<asmjit::Operand> {
         return seed;
     }
 };
-
-template<>
-struct std::hash<asmjit::x86::Gp> {
-    using argument_type = asmjit::x86::Gp;
-    using result_type = size_t;
-
-    result_type operator()(const argument_type& Op) const noexcept {
-        return std::hash<asmjit::Operand>{}(Op);
-    }
-};
-
-template<>
-struct std::hash<asmjit::x86::Vec> {
-    using argument_type = asmjit::x86::Vec;
-    using result_type = size_t;
-
-    result_type operator()(const argument_type& Op) const noexcept {
-        return std::hash<asmjit::Operand>{}(Op);
-    }
-};
-
-template<>
-struct std::hash<asmjit::Reg> {
-    using argument_type = asmjit::Reg;
-    using result_type = size_t;
-
-    result_type operator()(const argument_type& Op) const noexcept {
-        return std::hash<asmjit::Operand>{}(Op);
-    }
-};

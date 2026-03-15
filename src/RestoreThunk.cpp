@@ -1,10 +1,12 @@
 #include "RestoreThunk.hpp"
 #include "Context.hpp"
 
-#include <stdexcept>
+static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
+    return FThunkError { Code, std::move(Message) };
+}
 
-static FThunkPtr GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
-static FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);
+static FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
+static FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);
 
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgumentSize * Index);
@@ -36,10 +38,10 @@ static void RestoreNonVolatileRegisters(asmjit::x86::Assembler& TheAssembler, co
     }
 }
 
-FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
+FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
     switch (BindingType) {
         case EBindingThunkType::Default:
-            throw std::invalid_argument("Default binding thunks do not require a restore thunk.");
+            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Default binding thunks do not require a restore thunk."));
         case EBindingThunkType::Argument:
             return GenerateRestoreThunkForArgumentContext(CallTo, Signature, false, bLogAssembly);
         case EBindingThunkType::Register:
@@ -47,11 +49,11 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingTh
         case EBindingThunkType::ArgumentAndRegister:
             return GenerateRestoreThunkForArgumentContext(CallTo, Signature, true, bLogAssembly);
         default:
-            return nullptr;
+            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
     }
 }
 
-FThunkPtr GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, const bool bLogAssembly) {
+FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
@@ -157,13 +159,13 @@ FThunkPtr GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Sig
     TheAssembler.add(rsp, SumSpace);
     TheAssembler.ret();
 
-    if (TheAssembler.finalize() != Error::kOk) return nullptr;
+    if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize register restore thunk assembler."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add register restore thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
+FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
@@ -173,8 +175,6 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
 
     auto SrcInfo = FuncArgInfo{FuncSignature::build<void, ArgumentContext&>()};
     auto DestInfo = FuncArgInfo{DestinationSignature};
-    auto GpScratchReg = GetPlatformGpScratchReg();
-    auto XmmScratchReg = GetPlatformXmmScratchReg();
 
     const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
     const auto NonVolatileStackSpace = bSafe ? GetPlatformStackSpaceForNonVolatileRegs() : 0;
@@ -183,6 +183,8 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
     SumSpace += Padding;
     const auto NVPtr = ptr(rsp, ShadowArgSpace + Padding);
     TheAssembler.sub(rsp, SumSpace);
+    auto GpScratchReg = GetPlatformGpScratchReg();
+    auto XmmScratchReg = GetPlatformXmmScratchReg();
 
     // save nonvolatiles
     if (bSafe) {
@@ -210,8 +212,7 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
                 TheAssembler.movq(xmm(FuncValue.reg_id()), ArgContextPtr.clone_adjusted(ArgumentOffset));
             }
             else {
-                // todo return error
-                return nullptr;
+                return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument restore thunk encountered an unsupported register argument type."));
             }
         }
         else {
@@ -224,8 +225,7 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
                 TheAssembler.movq(ptr(rsp, FuncValue.stack_offset()), XmmScratchReg);
             }
             else {
-                // todo return error
-                return nullptr;
+                return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument restore thunk encountered an unsupported stack argument type."));
             }
         }
     }
@@ -268,8 +268,8 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
     TheAssembler.add(rsp, SumSpace);
     TheAssembler.ret();
 
-    if (TheAssembler.finalize() != Error::kOk) return nullptr;
+    if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize argument restore thunk assembler."));
     void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return nullptr;
+    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add argument restore thunk to the JIT runtime."));
     return FThunkPtr { Temp };
 }

@@ -22,17 +22,23 @@ static double testcomplexfnoriginal(double p0, int p1, float p2, float p3, int64
 
 int main() {
     void* binder = (void*)0x42;
-    try {
-        auto bind = GenerateBindingThunk(testcomplexfn, binder, EBindingThunkType::Register);
-        complexrestore = GenerateRestoreThunk(testcomplexfnoriginal, EBindingThunkType::Register);
-        //auto bind = GenerateRestoreThunk(testcomplexfn);
-        //testcomplexfn((void*)0x42, 1.0, 2, 3.0, false, 123, 456, 5.5, 7.2);
-        auto ret = reinterpret_cast<double(*)(double, int, float, float, int64_t, int64_t, double, double)>(bind.get())(1.0, 2, 3.0, 4.0, 5, 6, 7.0, 8.0);
-        std::cout << ret << std::endl;
-        complexrestore.reset();
-    } catch (std::exception& e) {
-        std::cerr << e.what() << std::endl;
+    auto bindResult = GenerateBindingThunk(testcomplexfn, binder, EBindingThunkType::Register);
+    if (!bindResult) {
+        std::cerr << bindResult.error().Message << std::endl;
+        return 1;
     }
+
+    auto restoreResult = GenerateRestoreThunk(testcomplexfnoriginal, EBindingThunkType::Register);
+    if (!restoreResult) {
+        std::cerr << restoreResult.error().Message << std::endl;
+        return 1;
+    }
+
+    auto bind = std::move(bindResult.value());
+    complexrestore = std::move(restoreResult.value());
+    auto ret = reinterpret_cast<double(*)(double, int, float, float, int64_t, int64_t, double, double)>(bind.get())(1.0, 2, 3.0, 4.0, 5, 6, 7.0, 8.0);
+    std::cout << ret << std::endl;
+    complexrestore.reset();
 
     return 0;
 }

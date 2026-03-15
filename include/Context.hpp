@@ -52,6 +52,12 @@ struct RegisterContextStack {
     static RegisterContext* Top();
 };
 
+#ifdef THUNK_ENABLE_TEST_HOOKS
+using FRegisterContextStackFatalHandler = void(*)(const char* Message);
+void SetRegisterContextStackFatalHandler(FRegisterContextStackFatalHandler Handler);
+void ResetRegisterContextStackFatalHandler();
+#endif
+
 class ArgumentContext {
 public:
     enum : uint64_t {

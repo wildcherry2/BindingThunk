@@ -5,6 +5,10 @@
 #include <iostream>
 #include <format>
 
+static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
+    return FThunkError { Code, std::move(Message) };
+}
+
 auto GetJitRuntime()-> JitRuntime&
 {
     static JitRuntime JitRuntime{};
@@ -163,7 +167,7 @@ Gp GetPlatformGpScratchReg() {
         for (int I = 0; I < 32; ++I) {
             if (((1 << I) & RegsMask) && I != Gp::kIdAx) return asmjit::x86::gpq(I);
         }
-        throw std::runtime_error("Failed to find Gp scratch register for platform!");
+        return Gp {};
     }();
 
     return Reg;
@@ -176,7 +180,7 @@ Vec GetPlatformXmmScratchReg() {
         for (int I = 0; I < 32; ++I) {
             if ((1 << I) & RegsMask) return asmjit::x86::xmm(I);
         }
-        throw std::runtime_error("Failed to find Vec scratch register for platform!");
+        return Vec {};
     }();
 
     return Reg;
