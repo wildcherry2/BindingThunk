@@ -1,6 +1,2 @@
-cmake-build-debug\
-cmake-build-release\
-cmake-build-tests\
-cmake-build-debug-coverage\
-.idea\
-out\
+/.idea/
+/out/
