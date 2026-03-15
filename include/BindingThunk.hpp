@@ -2,6 +2,8 @@
 #include "Common.hpp"
 #include "Context.hpp"
 
+namespace RC::Thunk {
+
 enum class EBindingThunkType
 {
     Default,
@@ -31,4 +33,6 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* Bi
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Argument, const bool bLogAssembly = false) {
     return GenerateBindingThunk(reinterpret_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(), Type, bLogAssembly);
+}
+
 }

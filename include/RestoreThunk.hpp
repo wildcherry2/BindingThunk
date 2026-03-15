@@ -2,6 +2,8 @@
 #include "Common.hpp"
 #include "BindingThunk.hpp"
 
+namespace RC::Thunk {
+
 // Restore thunks are only valid for non-default binding modes.
 FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, bool bLogAssembly = false);
 
@@ -11,4 +13,6 @@ FThunkResult GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThun
         FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
         BindingType,
         bLogAssembly);
+}
+
 }

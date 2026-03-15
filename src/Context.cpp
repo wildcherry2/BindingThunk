@@ -3,6 +3,8 @@
 #include <exception>
 #include <iostream>
 
+namespace RC::Thunk {
+
 thread_local RegisterContext* RegisterContextArray[256];
 thread_local int RegisterContextStackIndex = -1;
 
@@ -48,3 +50,5 @@ void ResetRegisterContextStackFatalHandler() {
     GRegisterContextStackFatalHandler = &DefaultRegisterContextStackFatalHandler;
 }
 #endif
+
+}

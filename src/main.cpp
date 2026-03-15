@@ -5,6 +5,8 @@
 #include "BindingThunk.hpp"
 #include "RestoreThunk.hpp"
 
+using namespace RC::Thunk;
+
 FThunkPtr complexrestore{};
 static double testcomplexfn(void* bound, double p0, int p1, float p2, float p3, int64_t p4, int64_t p5, double p6, double p7) {
     std::cout << std::format("bound:{}\np0:{}\np1:{}\np2:{}\np3:{}\np4:{}\np5:{}\np6:{}\np7:{}\n\n",

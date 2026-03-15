@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <cstddef>
+
+namespace RC::Thunk {
 
 using asmjit::JitRuntime;
 using asmjit::CodeHolder;
@@ -52,6 +55,7 @@ enum class EThunkErrorCode {
     InvokeCreationFailed,
     AssemblerFinalizeFailed,
     JitAddFailed,
+    WindowsUnwindRegistrationFailed,
 };
 
 struct FThunkError {
@@ -113,3 +117,44 @@ auto GetJitRuntime() -> JitRuntime&;
 void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
 auto GetErrorHandler() -> ErrorHandler*;
 auto GetLogger() -> Logger*;
+
+struct FManualThunkFramePlan {
+    std::vector<Gp> PushedGpRegs{};
+    std::vector<Vec> SavedVecRegs{};
+    uint32_t RawStackAllocation{};
+    uint32_t SavedVecOffset{};
+};
+
+struct FManualThunkFrameState {
+    FManualThunkFramePlan Plan{};
+    uint32_t StackAllocation{};
+    uint32_t PushBytes{};
+    std::vector<std::byte> WindowsUnwindInfo{};
+
+    [[nodiscard]] uint32_t EntryRspOffset() const noexcept {
+        return StackAllocation + PushBytes + sizeof(uint64_t);
+    }
+
+    [[nodiscard]] bool HasWindowsUnwindInfo() const noexcept {
+        return !WindowsUnwindInfo.empty();
+    }
+};
+
+#if defined(_WIN64)
+struct FThunkWindowsRuntimeInfo {
+    asmjit::Label BeginLabel{};
+    asmjit::Label EndLabel{};
+    asmjit::Label UnwindInfoLabel{};
+};
+#endif
+
+FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThunkFramePlan Plan);
+void EmitManualThunkEpilog(Assembler& TheAssembler, const FManualThunkFrameState& FrameState);
+void EmitManualThunkWindowsUnwindInfo(Assembler& TheAssembler, const FManualThunkFrameState& FrameState, asmjit::Label UnwindInfoLabel);
+#if defined(_WIN64)
+std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFrame& Frame);
+FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage, const FThunkWindowsRuntimeInfo* WindowsRuntimeInfo);
+#endif
+FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage);
+
+}

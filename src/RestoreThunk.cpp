@@ -1,6 +1,8 @@
 #include "RestoreThunk.hpp"
 #include "Context.hpp"
 
+namespace RC::Thunk {
+
 static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
     return FThunkError { Code, std::move(Message) };
 }
@@ -10,32 +12,6 @@ static FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSig
 
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgumentSize * Index);
-}
-
-static void SaveNonVolatileRegisters(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& GpPtr, const asmjit::x86::Mem& VecPtr) {
-    auto Offset = 0;
-    for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
-        TheAssembler.mov(GpPtr.clone_adjusted(Offset), PlatformNonVolatileGpReg);
-        Offset += 8;
-    }
-    Offset = 0;
-    for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
-        TheAssembler.movdqu(VecPtr.clone_adjusted(Offset), PlatformNonVolatileVecReg);
-        Offset += 16;
-    }
-}
-
-static void RestoreNonVolatileRegisters(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& GpPtr, const asmjit::x86::Mem& VecPtr) {
-    auto Offset = 0;
-    for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
-        TheAssembler.mov(PlatformNonVolatileGpReg, GpPtr.clone_adjusted(Offset));
-        Offset += 8;
-    }
-    Offset = 0;
-    for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
-        TheAssembler.movdqu(PlatformNonVolatileVecReg, VecPtr.clone_adjusted(Offset));
-        Offset += 16;
-    }
 }
 
 FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
@@ -60,35 +36,42 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
+#if defined(_WIN64)
+    const auto BeginLabel = TheAssembler.new_label();
+    const auto EndLabel = TheAssembler.new_label();
+    const auto UnwindInfoLabel = TheAssembler.new_label();
+#endif
     FuncArgInfo ArgInfo { Signature };
 
     // allocate locals with shadow space for calls (call to 'CallTo' will always take the most space so we use ArgInfo.Detail().arg_stack_size())
     // we'll need space for all nonvolatile registers and argument registers in addition to the shadow/arg space + alignment.
     const auto ShadowArgSpace = ArgInfo.Detail().arg_stack_size();
-    const auto NVIntRegSpace = GetPlatformNonVolatileGpRegs().size() * 8;
     const auto NVFltRegSpace = GetPlatformNonVolatileVecRegs().size() * 16;
     const auto IntArgSpace = ArgInfo.GetArgumentIntegralRegisters().size() * 8;
     const auto FltArgSpace = ArgInfo.GetArgumentFloatingRegisters().size() * 16;
-    auto SumSpace = ShadowArgSpace + NVIntRegSpace + NVFltRegSpace + IntArgSpace + FltArgSpace;
-    const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
-    SumSpace += Pad;
-    TheAssembler.sub(rsp, SumSpace);
+    const auto SavedVecOffset = static_cast<uint32_t>((ShadowArgSpace + IntArgSpace + FltArgSpace + 15) & ~uint32_t(15));
+#if defined(_WIN64)
+    TheAssembler.bind(BeginLabel);
+#endif
+    const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
+        .PushedGpRegs = GetPlatformNonVolatileGpRegs(),
+        .SavedVecRegs = GetPlatformNonVolatileVecRegs(),
+        .RawStackAllocation = static_cast<uint32_t>(SavedVecOffset + NVFltRegSpace),
+        .SavedVecOffset = SavedVecOffset,
+    });
     auto GpScratchReg = GetPlatformGpScratchReg();
     /*
      * Roughly:
      * struct Locals {
-     *      ShadowArgSpace + Padding  // offset 0
+     *      ShadowArgSpace            // offset 0
      *      IntArgSpace               // offset sizeof ShadowArgSpace
      *      FltArgSpace               // offset sizeof ShadowArgSpace + sizeof IntArgSpace
-     *      NVIntRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace
-     *      NVFltRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace + NVIntRegSpace
+     *      NVFltRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace
      * }
      */
-    const auto IntArgPtr = ptr(rsp, ShadowArgSpace + Pad);      // treat as an array of uint64_t
+    const auto IntArgPtr = ptr(rsp, static_cast<int32_t>(ShadowArgSpace)); // treat as an array of uint64_t
     const auto FltArgPtr = IntArgPtr.clone_adjusted(IntArgSpace);          // treat as an array of Xmm
-    const auto NVIntRegPtr = FltArgPtr.clone_adjusted(FltArgSpace);        // treat as an array of uint64_t
-    const auto NVFltRegPtr = NVIntRegPtr.clone_adjusted(NVIntRegSpace);    // treat as an array of Xmm
-    const auto RspInitial = NVFltRegPtr.clone_adjusted(NVFltRegSpace + 8); // pointer to what rsp was at the beginning of the function + return address space
+    const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
 
     // we need to call RegisterContextStack::Top, so we need to save the registers with arguments first
@@ -105,9 +88,6 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     TheAssembler.call(&RegisterContextStack::Top); // shadow space already allocated
 
     // restore context, except for arg registers
-    // start with pushing nv-registers, since we'll have to restore them after the call
-    SaveNonVolatileRegisters(TheAssembler, NVIntRegPtr, NVFltRegPtr);
-
     // move arguments on the stack to new stack slot for the call (already allocated)
     for (auto& Arg: ArgInfo.GetArguments()) {
         if (Arg.is_stack()) {
@@ -152,17 +132,21 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     // now args are setup and context is restored, make the call
     TheAssembler.call(CallTo);
 
-    // restore nv-registers
-    RestoreNonVolatileRegisters(TheAssembler, NVIntRegPtr, NVFltRegPtr);
-
     // now we're done, deallocate and return
-    TheAssembler.add(rsp, SumSpace);
+    EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();
+#if defined(_WIN64)
+    TheAssembler.bind(EndLabel);
+    EmitManualThunkWindowsUnwindInfo(TheAssembler, FrameState, UnwindInfoLabel);
+#endif
 
     if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize register restore thunk assembler."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add register restore thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+#if defined(_WIN64)
+    const FThunkWindowsRuntimeInfo WindowsRuntimeInfo { BeginLabel, EndLabel, UnwindInfoLabel };
+    return AddThunkToRuntime(Code, "Failed to add register restore thunk to the JIT runtime.", &WindowsRuntimeInfo);
+#else
+    return AddThunkToRuntime(Code, "Failed to add register restore thunk to the JIT runtime.");
+#endif
 }
 
 FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
@@ -172,24 +156,29 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
     CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
+#if defined(_WIN64)
+    const auto BeginLabel = TheAssembler.new_label();
+    const auto EndLabel = TheAssembler.new_label();
+    const auto UnwindInfoLabel = TheAssembler.new_label();
+#endif
 
     auto SrcInfo = FuncArgInfo{FuncSignature::build<void, ArgumentContext&>()};
     auto DestInfo = FuncArgInfo{DestinationSignature};
 
     const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
-    const auto NonVolatileStackSpace = bSafe ? GetPlatformStackSpaceForNonVolatileRegs() : 0;
-    auto SumSpace = ShadowArgSpace + NonVolatileStackSpace;
-    const auto Padding = (SumSpace % 16 == 8) ? 0 : 8;
-    SumSpace += Padding;
-    const auto NVPtr = ptr(rsp, ShadowArgSpace + Padding);
-    TheAssembler.sub(rsp, SumSpace);
+    const auto NonVolatileVecStackSpace = bSafe ? GetPlatformNonVolatileVecRegs().size() * sizeof(Xmm) : 0;
+    const auto SavedVecOffset = static_cast<uint32_t>((ShadowArgSpace + 15) & ~uint32_t(15));
+#if defined(_WIN64)
+    TheAssembler.bind(BeginLabel);
+#endif
+    const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
+        .PushedGpRegs = bSafe ? GetPlatformNonVolatileGpRegs() : std::vector<Gp> {},
+        .SavedVecRegs = bSafe ? GetPlatformNonVolatileVecRegs() : std::vector<Vec> {},
+        .RawStackAllocation = static_cast<uint32_t>((bSafe ? SavedVecOffset + NonVolatileVecStackSpace : ShadowArgSpace)),
+        .SavedVecOffset = SavedVecOffset,
+    });
     auto GpScratchReg = GetPlatformGpScratchReg();
     auto XmmScratchReg = GetPlatformXmmScratchReg();
-
-    // save nonvolatiles
-    if (bSafe) {
-        SaveNonVolatileRegisters(TheAssembler, NVPtr, NVPtr.clone_adjusted(GetPlatformNonVolatileGpRegs().size() * 8));
-    }
 
     const auto ContextReg = SrcInfo.GetArgumentIntegralRegisters()[0];
     const auto ContextPtr = ptr(ContextReg);
@@ -260,16 +249,20 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
     // make the call
     TheAssembler.call(CallTo);
 
-    // restore nonvolatile registers if needed
-    if (bSafe) {
-        RestoreNonVolatileRegisters(TheAssembler, NVPtr, NVPtr.clone_adjusted(GetPlatformNonVolatileGpRegs().size() * 8));
-    }
-
-    TheAssembler.add(rsp, SumSpace);
+    EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();
+#if defined(_WIN64)
+    TheAssembler.bind(EndLabel);
+    EmitManualThunkWindowsUnwindInfo(TheAssembler, FrameState, UnwindInfoLabel);
+#endif
 
     if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize argument restore thunk assembler."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add argument restore thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+#if defined(_WIN64)
+    const FThunkWindowsRuntimeInfo WindowsRuntimeInfo { BeginLabel, EndLabel, UnwindInfoLabel };
+    return AddThunkToRuntime(Code, "Failed to add argument restore thunk to the JIT runtime.", &WindowsRuntimeInfo);
+#else
+    return AddThunkToRuntime(Code, "Failed to add argument restore thunk to the JIT runtime.");
+#endif
+}
+
 }

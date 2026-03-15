@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+namespace RC::Thunk {
+
 static FThunkError MakeThunkError(const EThunkErrorCode Code, std::string Message) {
     return FThunkError { Code, std::move(Message) };
 }
@@ -82,15 +84,16 @@ FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, 
     TheAssembler.mov(asmjit::x86::gpq(Dest.GetArguments()[0].reg_id()), BindParam);
     TheAssembler.jmp(ToFn);
     if (TheAssembler.finalize() != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize simple binding thunk assembler."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add simple binding thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+    return AddThunkToRuntime(Code, "Failed to add simple binding thunk to the JIT runtime.");
 }
 
 FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     asmjit::CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     asmjit::x86::Compiler TheCompiler { &Code };
+#if defined(_WIN64)
+    const auto EndLabel = TheCompiler.new_label();
+#endif
 
     asmjit::InvokeNode* Invoker{};
     auto* ThisFunc = TheCompiler.add_func(Src.Signature());
@@ -135,11 +138,38 @@ FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src,
     }
     else TheCompiler.ret();
     TheCompiler.end_func();
+#if defined(_WIN64)
+    TheCompiler.bind(EndLabel);
+#endif
 
     if (TheCompiler.finalize() != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize complex binding thunk compiler output."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add complex binding thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+
+#if defined(_WIN64)
+    const FThunkWindowsRuntimeInfo* WindowsRuntimeInfoPtr = nullptr;
+    FThunkWindowsRuntimeInfo WindowsRuntimeInfo{};
+    if (const auto WindowsUnwindInfo = BuildWindowsUnwindInfoForFuncFrame(ThisFunc->frame()); !WindowsUnwindInfo.empty()) {
+        asmjit::x86::Assembler UnwindAssembler { &Code };
+        const auto UnwindInfoLabel = UnwindAssembler.new_label();
+        if (UnwindAssembler.set_offset(Code.text_section()->buffer_size()) != asmjit::Error::kOk) {
+            return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to position complex binding thunk unwind assembler."));
+        }
+        FManualThunkFrameState UnwindState{};
+        UnwindState.WindowsUnwindInfo = WindowsUnwindInfo;
+        EmitManualThunkWindowsUnwindInfo(
+            UnwindAssembler,
+            UnwindState,
+            UnwindInfoLabel
+        );
+        WindowsRuntimeInfo = FThunkWindowsRuntimeInfo { ThisFunc->label(), EndLabel, UnwindInfoLabel };
+        WindowsRuntimeInfoPtr = &WindowsRuntimeInfo;
+    }
+#endif
+
+#if defined(_WIN64)
+    return AddThunkToRuntime(Code, "Failed to add complex binding thunk to the JIT runtime.", WindowsRuntimeInfoPtr);
+#else
+    return AddThunkToRuntime(Code, "Failed to add complex binding thunk to the JIT runtime.");
+#endif
 }
 
 FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
@@ -149,24 +179,31 @@ FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncA
     CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
+#if defined(_WIN64)
+    const auto BeginLabel = TheAssembler.new_label();
+    const auto EndLabel = TheAssembler.new_label();
+    const auto UnwindInfoLabel = TheAssembler.new_label();
+#endif
 
     const auto ShadowArgSpace = Dest.Detail().arg_stack_size();
     constexpr auto RegisterCtxSpace = sizeof(RegisterContext);
-    auto SumSpace = ShadowArgSpace + RegisterCtxSpace;
-    const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
-    SumSpace += Pad;
-    TheAssembler.sub(rsp, SumSpace);
+#if defined(_WIN64)
+    TheAssembler.bind(BeginLabel);
+#endif
+    const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
+        .RawStackAllocation = static_cast<uint32_t>(ShadowArgSpace + RegisterCtxSpace),
+    });
     auto GpScratchReg = GetPlatformGpScratchReg();
     auto XmmScratchReg = GetPlatformXmmScratchReg();
     /*
      * Roughly:
      * struct Locals {
-     *      ShadowArgSpace + Padding    // offset 0
+     *      ShadowArgSpace              // offset 0
      *      RegisterCtxSpace            // offset sizeof ShadowArgSpace
      * }
      */
-    const auto ContextPtr = ptr(rsp, ShadowArgSpace + Pad);
-    const auto RspInitial = ContextPtr.clone_adjusted(RegisterCtxSpace + 8);
+    const auto ContextPtr = ptr(rsp, static_cast<int32_t>(ShadowArgSpace));
+    const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
     SaveRegisterContext(TheAssembler, ContextPtr, GpScratchReg);
 
@@ -236,13 +273,20 @@ FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncA
         }
     }
 
-    TheAssembler.add(rsp, SumSpace);
+    EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();
+#if defined(_WIN64)
+    TheAssembler.bind(EndLabel);
+    EmitManualThunkWindowsUnwindInfo(TheAssembler, FrameState, UnwindInfoLabel);
+#endif
 
     if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize register binding thunk assembler."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add register binding thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+#if defined(_WIN64)
+    const FThunkWindowsRuntimeInfo WindowsRuntimeInfo { BeginLabel, EndLabel, UnwindInfoLabel };
+    return AddThunkToRuntime(Code, "Failed to add register binding thunk to the JIT runtime.", &WindowsRuntimeInfo);
+#else
+    return AddThunkToRuntime(Code, "Failed to add register binding thunk to the JIT runtime.");
+#endif
 }
 
 FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
@@ -252,6 +296,11 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
     CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
+#if defined(_WIN64)
+    const auto BeginLabel = TheAssembler.new_label();
+    const auto EndLabel = TheAssembler.new_label();
+    const auto UnwindInfoLabel = TheAssembler.new_label();
+#endif
     auto DestInfo = FuncArgInfo{FuncSignature::build<void, void*, ArgumentContext&>()};
     auto SrcInfo = FuncArgInfo{SourceSignature};
 
@@ -262,16 +311,17 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
 
     auto CtxSpace = ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size());
     if (Type == EBindingThunkType::ArgumentAndRegister) CtxSpace += sizeof(RegisterContext);
-    auto SumSpace = ShadowArgSpace + CtxSpace;
-    const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
-    SumSpace += Pad;
-
-    TheAssembler.sub(rsp, SumSpace);
+#if defined(_WIN64)
+    TheAssembler.bind(BeginLabel);
+#endif
+    const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
+        .RawStackAllocation = static_cast<uint32_t>(ShadowArgSpace + CtxSpace),
+    });
     auto GpScratchReg = GetPlatformGpScratchReg();
     auto XmmScratchReg = GetPlatformXmmScratchReg();
-    const auto ArgContextPtr = ptr(rsp, ShadowArgSpace + Pad);
+    const auto ArgContextPtr = ptr(rsp, static_cast<int32_t>(ShadowArgSpace));
     const auto RegContextPtr = ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size()));
-    const auto RspInitial = ArgContextPtr.clone_adjusted(CtxSpace + 8);
+    const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
     // start by saving registers at the tail end of the data part of ArgumentContext, if needed
     if (Type == EBindingThunkType::ArgumentAndRegister) {
@@ -336,13 +386,20 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
         }
     }
 
-    TheAssembler.add(rsp, SumSpace);
+    EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();
+#if defined(_WIN64)
+    TheAssembler.bind(EndLabel);
+    EmitManualThunkWindowsUnwindInfo(TheAssembler, FrameState, UnwindInfoLabel);
+#endif
 
     if (TheAssembler.finalize() != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::AssemblerFinalizeFailed, "Failed to finalize argument binding thunk assembler."));
-    void* Temp{};
-    if (GetJitRuntime().add(&Temp, &Code) != Error::kOk) return std::unexpected(MakeThunkError(EThunkErrorCode::JitAddFailed, "Failed to add argument binding thunk to the JIT runtime."));
-    return FThunkPtr { Temp };
+#if defined(_WIN64)
+    const FThunkWindowsRuntimeInfo WindowsRuntimeInfo { BeginLabel, EndLabel, UnwindInfoLabel };
+    return AddThunkToRuntime(Code, "Failed to add argument binding thunk to the JIT runtime.", &WindowsRuntimeInfo);
+#else
+    return AddThunkToRuntime(Code, "Failed to add argument binding thunk to the JIT runtime.");
+#endif
 }
 
 FuncSignature ShiftSignature(const FuncSignature& InSignature) {
@@ -354,4 +411,6 @@ FuncSignature ShiftSignature(const FuncSignature& InSignature) {
     }
     InvokeSig.set_arg(0, asmjit::TypeId::kUIntPtr);
     return InvokeSig;
+}
+
 }

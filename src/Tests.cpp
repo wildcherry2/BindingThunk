@@ -7,9 +7,23 @@
 #include <cstdint>
 #include <memory>
 
+#if defined(_WIN64)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
+namespace RC::Thunk {
 FuncSignature ShiftSignature(const FuncSignature& InSignature);
 FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+}
+
+using namespace RC::Thunk;
 
 static FThunkPtr GRestoreThunk{};
 
@@ -36,6 +50,13 @@ static T ReadArgumentContextField(const ArgumentContext& Context, const uint64_t
     auto Raw = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(&Context) + Offset);
     return std::bit_cast<T>(Raw);
 }
+
+#if defined(_WIN64)
+static PRUNTIME_FUNCTION LookupThunkRuntimeFunction(const void* Thunk) {
+    DWORD64 ImageBase{};
+    return RtlLookupFunctionEntry(reinterpret_cast<DWORD64>(Thunk), &ImageBase, nullptr);
+}
+#endif
 
 struct DefaultNoArgBinder {
     int calls{};
@@ -898,6 +919,50 @@ TEST(BindingThunkTests, DefaultModeCannotGenerateRestoreThunk) {
     EXPECT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::InvalidBindingType);
 }
+
+#if defined(_WIN64)
+TEST(BindingThunkTests, RegisterRestoreThunkRegistersWindowsUnwindInfo) {
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalRegisterStackShift, EBindingThunkType::Register);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+
+    auto RestoreThunk = std::move(RestoreThunkResult.value());
+    const auto Address = RestoreThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    RestoreThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
+TEST(BindingThunkTests, ArgumentBindingThunkRegistersWindowsUnwindInfo) {
+    ArgumentNoArgBinder Binder{};
+    auto BindThunkResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Argument);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+
+    auto BindThunk = std::move(BindThunkResult.value());
+    const auto Address = BindThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    BindThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
+TEST(BindingThunkTests, ComplexBindingThunkRegistersWindowsUnwindInfo) {
+    DefaultComplexBinder Binder{};
+    auto BindThunkResult = GenerateBindingThunk<DefaultComplexBinder, float, int, int&, int*, intptr_t, void*>(
+        &DefaultComplexCallback,
+        &Binder,
+        EBindingThunkType::Default
+    );
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+
+    auto BindThunk = std::move(BindThunkResult.value());
+    const auto Address = BindThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    BindThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+#endif
 
 TEST(BindingThunkTests, RestoreThunkRejectsInvalidBindingMode) {
     auto Result = GenerateRestoreThunk(&OriginalArgumentNoArgs, static_cast<EBindingThunkType>(99));
