@@ -27,10 +27,10 @@ static void SaveRegisterContext(asmjit::x86::Assembler& TheAssembler, const asmj
     TheAssembler.mov(ContextPtr.clone_adjusted(offsetof(RegisterContext, rflags)), GpScratchReg);
 }
 
-FuncSignature ShiftSignature(const FuncSignature& InSignature);
-FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+THUNK_API FuncSignature ShiftSignature(const FuncSignature& InSignature);
+THUNK_API FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+static FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+THUNK_API FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 
 FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     auto InvokeSignature = ShiftSignature(SourceSignature);
@@ -53,7 +53,7 @@ FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature Sou
     }
 }
 
-FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
+THUNK_API FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     if (Src.Signature().arg_count() >= Dest.Signature().arg_count()) {
         return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidSignature, "GenerateSimpleShift source arg count is >= destination arg count."));
     }
@@ -167,7 +167,7 @@ FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src,
 #endif
 }
 
-FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
+THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
@@ -397,7 +397,7 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
 #endif
 }
 
-FuncSignature ShiftSignature(const FuncSignature& InSignature) {
+THUNK_API FuncSignature ShiftSignature(const FuncSignature& InSignature) {
     auto InvokeSig = InSignature;
     InvokeSig.add_arg(asmjit::TypeId::kUInt64); // doesn't matter what type we add, it'll get overwritten
     for (int ArgIndex = static_cast<int>(InvokeSig.arg_count()) - 2; ArgIndex >= 0; ArgIndex--)

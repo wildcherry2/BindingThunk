@@ -1,7 +1,11 @@
 cmake_minimum_required(VERSION 4.1)
 project(Thunk LANGUAGES CXX)
+
 include(FetchContent)
-include(CTest)
+
+option(THUNK_BUILD_SHARED "Build Thunk as a shared library" OFF)
+option(THUNK_BUILD_EXAMPLE "Build the example executable" OFF)
+option(THUNK_BUILD_TESTS "Build the unit tests" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -31,19 +35,56 @@ set(THUNK_SOURCES
     src/RestoreThunk.cpp
 )
 
-add_library(Thunk STATIC ${THUNK_PUBLIC_HEADERS} ${THUNK_SOURCES})
-target_include_directories(Thunk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(Thunk PUBLIC asmjit)
-
-add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
-
-option(THUNK_BUILD_EXAMPLE "Build the example executable" OFF)
-if (THUNK_BUILD_EXAMPLE)
-    add_executable(ThunkExample src/main.cpp)
-    target_link_libraries(ThunkExample PRIVATE Thunk)
+set(THUNK_LIBRARY_TYPE STATIC)
+if (THUNK_BUILD_SHARED)
+    set(THUNK_LIBRARY_TYPE SHARED)
 endif ()
 
-if (BUILD_TESTING)
+add_library(Thunk ${THUNK_LIBRARY_TYPE})
+add_library(Thunk::Thunk ALIAS Thunk)
+
+target_sources(Thunk
+    PRIVATE
+        ${THUNK_SOURCES}
+    PUBLIC
+        FILE_SET HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
+        FILES ${THUNK_PUBLIC_HEADERS}
+)
+
+target_include_directories(Thunk
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(Thunk
+    PUBLIC
+        asmjit
+)
+
+target_compile_features(Thunk PUBLIC cxx_std_23)
+target_compile_definitions(Thunk
+    PUBLIC
+        _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+)
+
+if (THUNK_BUILD_SHARED)
+    target_compile_definitions(Thunk
+        PUBLIC
+            THUNK_SHARED
+        PRIVATE
+            THUNK_EXPORTS
+    )
+endif ()
+
+if (THUNK_BUILD_EXAMPLE)
+    add_executable(ThunkExample src/main.cpp)
+    target_link_libraries(ThunkExample PRIVATE Thunk::Thunk)
+    target_compile_features(ThunkExample PRIVATE cxx_std_23)
+endif ()
+
+if (THUNK_BUILD_TESTS)
+    enable_testing()
     target_compile_definitions(Thunk PUBLIC THUNK_ENABLE_TEST_HOOKS)
 
     FetchContent_Declare(
@@ -58,7 +99,8 @@ if (BUILD_TESTING)
         include/Tests.hpp
         src/Tests.cpp
     )
-    target_link_libraries(ThunkTests PRIVATE Thunk GTest::gtest)
+    target_link_libraries(ThunkTests PRIVATE Thunk::Thunk GTest::gtest)
+    target_compile_features(ThunkTests PRIVATE cxx_std_23)
 
     include(GoogleTest)
     gtest_discover_tests(ThunkTests)

@@ -17,7 +17,7 @@ enum class EBindingThunkType
 // - Argument: bound parameter + ArgumentContext
 // - Register: bound parameter + RegisterContextStack pairing
 // - ArgumentAndRegister: bound parameter + ArgumentContext carrying RegisterContext
-FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default, bool bLogAssembly = false);
+THUNK_API FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default, bool bLogAssembly = false);
 
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const EBindingThunkType BindingType = EBindingThunkType::Default, const bool bLogAssembly = false) {
@@ -28,7 +28,7 @@ FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...)
         bLogAssembly);
 }
 
-FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Argument, bool bLogAssembly = false);
+THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Argument, bool bLogAssembly = false);
 
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Argument, const bool bLogAssembly = false) {

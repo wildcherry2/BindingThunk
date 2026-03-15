@@ -17,12 +17,6 @@
 #include <Windows.h>
 #endif
 
-namespace RC::Thunk {
-FuncSignature ShiftSignature(const FuncSignature& InSignature);
-FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
-}
-
 using namespace RC::Thunk;
 
 static FThunkPtr GRestoreThunk{};
@@ -584,6 +578,9 @@ TEST(CommonTests, GetLoggerIsStableAndInitializeCodeHolderUsesIt) {
     ASSERT_NE(Logger, nullptr);
     EXPECT_EQ(GetAsmJitLogger(), Logger);
 
+#if defined(THUNK_SHARED)
+    GTEST_SKIP() << "InitializeCodeHolder is not exercised across a shared-library boundary.";
+#else
     CodeHolder CodeWithLogger{};
     InitializeCodeHolder(CodeWithLogger, true);
     EXPECT_EQ(CodeWithLogger.logger(), Logger);
@@ -591,6 +588,7 @@ TEST(CommonTests, GetLoggerIsStableAndInitializeCodeHolderUsesIt) {
     CodeHolder CodeWithoutLogger{};
     InitializeCodeHolder(CodeWithoutLogger, false);
     EXPECT_EQ(CodeWithoutLogger.logger(), nullptr);
+#endif
 }
 
 TEST(CommonTests, SetLogFunctionOverridesGetterAndAsmJitLoggerOutput) {

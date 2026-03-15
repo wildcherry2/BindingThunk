@@ -12,6 +12,22 @@
 
 namespace RC::Thunk {
 
+#if defined(_WIN32)
+#  if defined(THUNK_SHARED)
+#    if defined(THUNK_EXPORTS)
+#      define THUNK_API __declspec(dllexport)
+#    else
+#      define THUNK_API __declspec(dllimport)
+#    endif
+#  else
+#    define THUNK_API
+#  endif
+#elif defined(__GNUC__) && defined(THUNK_SHARED)
+#  define THUNK_API __attribute__((visibility("default")))
+#else
+#  define THUNK_API
+#endif
+
 using asmjit::JitRuntime;
 using asmjit::CodeHolder;
 using asmjit::ErrorHandler;
@@ -40,7 +56,7 @@ struct AsmJitCompatibleArgStr<void>
 template<typename T>
 using AsmJitCompatibleArg = AsmJitCompatibleArgStr<T>::Type;
 
-struct FThunkDeleter
+struct THUNK_API FThunkDeleter
 {
     void operator()(void* Thunk) const noexcept;
 };
@@ -69,7 +85,7 @@ struct FThunkError {
 
 using FThunkResult = std::expected<FThunkPtr, FThunkError>;
 
-class FuncArgInfo
+class THUNK_API FuncArgInfo
 {
 public:
     FuncArgInfo() = delete;
@@ -101,11 +117,11 @@ private:
     std::optional<std::vector<Vec>> _VecArgRegs{};
 };
 
-const std::vector<Gp>&  GetPlatformNonVolatileGpRegs();
-const std::vector<Vec>& GetPlatformNonVolatileVecRegs();
-size_t GetPlatformStackSpaceForNonVolatileRegs();
-Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
-Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
+THUNK_API const std::vector<Gp>&  GetPlatformNonVolatileGpRegs();
+THUNK_API const std::vector<Vec>& GetPlatformNonVolatileVecRegs();
+THUNK_API size_t GetPlatformStackSpaceForNonVolatileRegs();
+THUNK_API Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
+THUNK_API Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
 
 // borrowed from SafetyHook
 union Xmm {
@@ -117,18 +133,18 @@ union Xmm {
     double f64[2];
 };
 
-auto GetJitRuntime() -> JitRuntime&;
-std::wstring WideFromUtf8(std::string_view Message);
+THUNK_API auto GetJitRuntime() -> JitRuntime&;
+THUNK_API std::wstring WideFromUtf8(std::string_view Message);
 inline FThunkError MakeThunkError(const EThunkErrorCode Code, const std::string_view Message) {
     return FThunkError { Code, WideFromUtf8(Message) };
 }
-void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
-auto GetAsmJitErrorHandler() -> ErrorHandler*;
-auto GetAsmJitLogger() -> Logger*;
-auto GetLogFunction() -> LogFn;
-auto GetErrorLogFunction() -> LogFn;
-auto SetLogFunction(LogFn fn) -> void;
-auto SetErrorLogFunction(LogFn fn) -> void;
+THUNK_API void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
+THUNK_API auto GetAsmJitErrorHandler() -> ErrorHandler*;
+THUNK_API auto GetAsmJitLogger() -> Logger*;
+THUNK_API auto GetLogFunction() -> LogFn;
+THUNK_API auto GetErrorLogFunction() -> LogFn;
+THUNK_API auto SetLogFunction(LogFn fn) -> void;
+THUNK_API auto SetErrorLogFunction(LogFn fn) -> void;
 
 struct FManualThunkFramePlan {
     std::vector<Gp> PushedGpRegs{};
@@ -160,13 +176,13 @@ struct FThunkWindowsRuntimeInfo {
 };
 #endif
 
-FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThunkFramePlan Plan);
-void EmitManualThunkEpilog(Assembler& TheAssembler, const FManualThunkFrameState& FrameState);
-void EmitManualThunkWindowsUnwindInfo(Assembler& TheAssembler, const FManualThunkFrameState& FrameState, asmjit::Label UnwindInfoLabel);
+THUNK_API FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThunkFramePlan Plan);
+THUNK_API void EmitManualThunkEpilog(Assembler& TheAssembler, const FManualThunkFrameState& FrameState);
+THUNK_API void EmitManualThunkWindowsUnwindInfo(Assembler& TheAssembler, const FManualThunkFrameState& FrameState, asmjit::Label UnwindInfoLabel);
 #if defined(_WIN64)
-std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFrame& Frame);
-FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage, const FThunkWindowsRuntimeInfo* WindowsRuntimeInfo);
+THUNK_API std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFrame& Frame);
+THUNK_API FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage, const FThunkWindowsRuntimeInfo* WindowsRuntimeInfo);
 #endif
-FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage);
+THUNK_API FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage);
 
 }

@@ -48,7 +48,7 @@ inline std::unordered_map<asmjit::Operand, size_t> RegisterContextOffsets = {
 };
 #undef mro
 
-struct RegisterContextStack {
+struct THUNK_API RegisterContextStack {
     static void Push(RegisterContext* Context);
     static void Pop();
     static RegisterContext* Top();
@@ -56,8 +56,8 @@ struct RegisterContextStack {
 
 #ifdef THUNK_ENABLE_TEST_HOOKS
 using FRegisterContextStackFatalHandler = void(*)(const char* Message);
-void SetRegisterContextStackFatalHandler(FRegisterContextStackFatalHandler Handler);
-void ResetRegisterContextStackFatalHandler();
+THUNK_API void SetRegisterContextStackFatalHandler(FRegisterContextStackFatalHandler Handler);
+THUNK_API void ResetRegisterContextStackFatalHandler();
 #endif
 
 class ArgumentContext {

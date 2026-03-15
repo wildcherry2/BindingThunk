@@ -1,0 +1,144 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 1,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "23",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "THUNK_BUILD_EXAMPLE": "OFF",
+        "THUNK_BUILD_SHARED": "OFF",
+        "THUNK_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "debug-static",
+      "inherits": "base",
+      "displayName": "Debug Static Library",
+      "description": "Build the default static Thunk library in Debug."
+    },
+    {
+      "name": "debug-static-tests",
+      "inherits": "debug-static",
+      "displayName": "Debug Static Library With Tests",
+      "description": "Build the default static Thunk library and unit tests in Debug.",
+      "cacheVariables": {
+        "THUNK_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "debug-static-example",
+      "inherits": "debug-static",
+      "displayName": "Debug Static Library With Example",
+      "description": "Build the default static Thunk library and example executable in Debug.",
+      "cacheVariables": {
+        "THUNK_BUILD_EXAMPLE": "ON"
+      }
+    },
+    {
+      "name": "debug-shared",
+      "inherits": "base",
+      "displayName": "Debug Shared Library",
+      "description": "Build Thunk as a shared library in Debug.",
+      "cacheVariables": {
+        "THUNK_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "debug-shared-tests",
+      "inherits": "debug-shared",
+      "displayName": "Debug Shared Library With Tests",
+      "description": "Build Thunk as a shared library with unit tests in Debug.",
+      "cacheVariables": {
+        "THUNK_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "debug-shared-example",
+      "inherits": "debug-shared",
+      "displayName": "Debug Shared Library With Example",
+      "description": "Build Thunk as a shared library with the example executable in Debug.",
+      "cacheVariables": {
+        "THUNK_BUILD_EXAMPLE": "ON"
+      }
+    },
+    {
+      "name": "release-static",
+      "inherits": "base",
+      "displayName": "Release Static Library",
+      "description": "Build the default static Thunk library in Release.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "release-shared",
+      "inherits": "base",
+      "displayName": "Release Shared Library",
+      "description": "Build Thunk as a shared library in Release.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "THUNK_BUILD_SHARED": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug-static",
+      "configurePreset": "debug-static"
+    },
+    {
+      "name": "debug-static-tests",
+      "configurePreset": "debug-static-tests"
+    },
+    {
+      "name": "debug-static-example",
+      "configurePreset": "debug-static-example"
+    },
+    {
+      "name": "debug-shared",
+      "configurePreset": "debug-shared"
+    },
+    {
+      "name": "debug-shared-tests",
+      "configurePreset": "debug-shared-tests"
+    },
+    {
+      "name": "debug-shared-example",
+      "configurePreset": "debug-shared-example"
+    },
+    {
+      "name": "release-static",
+      "configurePreset": "release-static"
+    },
+    {
+      "name": "release-shared",
+      "configurePreset": "release-shared"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "debug-static-tests",
+      "configurePreset": "debug-static-tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug-shared-tests",
+      "configurePreset": "debug-shared-tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
