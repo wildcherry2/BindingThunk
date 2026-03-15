@@ -1,10 +1,8 @@
 #pragma once
 #include <bit>
 #include <cstdint>
-#include <asmjit/asmjit.h>
 #include <asmjit/x86.h>
 #include <unordered_map>
-#include <unordered_set>
 #include "Common.hpp"
 #include "Hashes.hpp"
 
@@ -56,6 +54,11 @@ struct RegisterContextStack {
 
 class ArgumentContext {
 public:
+    enum : uint64_t {
+        HasReturnValueFlag = 1,
+        HasRegisterContextFlag = 2,
+    };
+
     template<typename T>
     T GetArgumentAs(const uint64_t Index) const {
         return std::bit_cast<T>(_Data[Index]);
@@ -73,6 +76,7 @@ public:
 
     template<typename T>
     void SetArgumentByReference(const uint64_t Index, const T& Value) {
+        static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!");
         _Data[Index] = std::bit_cast<uint64_t>(Value);
     }
 
@@ -82,6 +86,8 @@ public:
     }
 
     [[nodiscard]] bool HasReturnValue() const noexcept { return _Flags & 1; }
+    [[nodiscard]] bool HasRegisterContext() const noexcept { return _Flags & HasRegisterContextFlag; }
+    [[nodiscard]] uint64_t GetArgumentsCount() const noexcept { return _ArgsCount; }
     void SetReturnValue(const uint64_t Value) noexcept { _ReturnValue = Value; }
 
     template<typename T>

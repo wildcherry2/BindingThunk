@@ -6,6 +6,7 @@
 #include <optional>
 
 using asmjit::JitRuntime;
+using asmjit::CodeHolder;
 using asmjit::ErrorHandler;
 using asmjit::Logger;
 using asmjit::RegMask;
@@ -50,9 +51,6 @@ public:
     [[nodiscard]] const std::vector<asmjit::FuncValue>& GetReturnValues() noexcept;
     [[nodiscard]] RegMask GpRegMask() const noexcept;
     [[nodiscard]] RegMask VecRegMask() const noexcept;
-    [[nodiscard]] bool IsArgumentRegister(const Gp& Reg) const noexcept;
-    [[nodiscard]] bool IsArgumentRegister(const Vec& Reg) const noexcept;
-    [[nodiscard]] bool IsArgumentRegister(const asmjit::Operand& Reg) const noexcept;
 
     // returns Gp registers used in the arguments. not guaranteed to be in order.
     [[nodiscard]] const std::vector<Gp>& GetArgumentIntegralRegisters() noexcept;
@@ -91,5 +89,6 @@ union Xmm {
 };
 
 auto GetJitRuntime() -> JitRuntime&;
+void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
 auto GetErrorHandler() -> ErrorHandler*;
 auto GetLogger() -> Logger*;

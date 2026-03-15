@@ -11,6 +11,12 @@ auto GetJitRuntime()-> JitRuntime&
     return JitRuntime;
 }
 
+void InitializeCodeHolder(CodeHolder& Code, const bool bLogAssembly) {
+    Code.set_logger(bLogAssembly ? GetLogger() : nullptr);
+    Code.set_error_handler(GetErrorHandler());
+    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+}
+
 class UE4SSJitErrorHandler : public ErrorHandler
 {
     public: ~UE4SSJitErrorHandler() noexcept override = default;
@@ -86,20 +92,6 @@ const std::vector<asmjit::FuncValue>& FuncArgInfo::GetReturnValues() noexcept {
 
 asmjit::RegMask FuncArgInfo::GpRegMask() const noexcept { return _GpRegMask; }
 asmjit::RegMask FuncArgInfo::VecRegMask() const noexcept { return _VecRegMask; }
-
-bool FuncArgInfo::IsArgumentRegister(const Gp& Reg) const noexcept {
-    return (1 << Reg.id()) & _GpRegMask;
-}
-
-bool FuncArgInfo::IsArgumentRegister(const Vec& Reg) const noexcept {
-    return (1 << Reg.id()) & _VecRegMask;
-}
-
-bool FuncArgInfo::IsArgumentRegister(const asmjit::Operand& Reg) const noexcept {
-    if (Reg.is_gp()) return IsArgumentRegister(Reg.as<Gp>());
-    if (Reg.is_vec()) return IsArgumentRegister(Reg.as<Vec>());
-    return false;
-}
 
 const std::vector<Gp> & FuncArgInfo::GetArgumentIntegralRegisters() noexcept {
     if (_IntArgRegs) return *_IntArgRegs;

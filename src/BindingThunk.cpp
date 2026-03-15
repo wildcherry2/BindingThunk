@@ -4,36 +4,60 @@
 #include <string>
 #include <vector>
 
-FuncSignature ShiftSignature(const FuncSignature& InSignature);
-FThunkPtr GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest);
-FThunkPtr GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest);
-FThunkPtr GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest);
+static int32_t GetArgumentContextOffset(const size_t Index) {
+    return static_cast<int32_t>(ArgumentContext::ArgsOffset + (ArgumentContext::ArgumentSize * Index));
+}
 
-FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type) {
+static void StoreImmediateU64(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& Destination, const uint64_t Value, const asmjit::x86::Gp& GpScratchReg) {
+    TheAssembler.mov(GpScratchReg, Value);
+    TheAssembler.mov(Destination, GpScratchReg);
+}
+
+static void SaveRegisterContext(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& ContextPtr, const asmjit::x86::Gp& GpScratchReg) {
+    for (const auto& [Register, Offset] : RegisterContextOffsets) {
+        if (Register.is_gp()) {
+            TheAssembler.mov(ContextPtr.clone_adjusted(Offset), Register.as<asmjit::x86::Gp>());
+        }
+        else if (Register.is_vec()) {
+            TheAssembler.movdqu(ContextPtr.clone_adjusted(Offset), Register.as<asmjit::x86::Vec>());
+        }
+    }
+    TheAssembler.pushfq();
+    TheAssembler.pop(GpScratchReg);
+    TheAssembler.mov(ContextPtr.clone_adjusted(offsetof(RegisterContext, rflags)), GpScratchReg);
+}
+
+FuncSignature ShiftSignature(const FuncSignature& InSignature);
+FThunkPtr GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+FThunkPtr GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+FThunkPtr GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+
+FThunkPtr GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     auto InvokeSignature = ShiftSignature(SourceSignature);
     FuncArgInfo SrcSig{SourceSignature};
     FuncArgInfo DestSig{InvokeSignature};
     switch (Type) {
         case EBindingThunkType::Default: {
             auto StackAllocSize = DestSig.Detail().arg_stack_size() - DestSig.Detail().red_zone_size() - DestSig.Detail().spill_zone_size();
-            return StackAllocSize > 0 ? GenerateComplexShift(ToFn, BindParam, SrcSig, DestSig) : GenerateSimpleShift(ToFn, BindParam, SrcSig, DestSig);
+            return StackAllocSize > 0 ? GenerateComplexShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly) : GenerateSimpleShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
         }
-        case EBindingThunkType::WithRegisterContext: {
-            return GenerateShiftWithRegisterContext(ToFn, BindParam, SrcSig, DestSig);
+        case EBindingThunkType::Register: {
+            return GenerateShiftWithRegisterContext(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
         }
+        case EBindingThunkType::Argument:
+        case EBindingThunkType::ArgumentAndRegister:
+            throw std::invalid_argument("Argument binding thunks require a callback that takes ArgumentContext&.");
         default: {
             return nullptr;
         }
     }
 }
 
-FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest) {
+FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     if (Src.Signature().arg_count() >= Dest.Signature().arg_count()) throw std::runtime_error("GenerateSimpleShift Src arg count is >= Dest arg count!");
 
     asmjit::CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
 
     for (int32_t ArgIndex = Src.GetArguments().size() - 1; ArgIndex >= 0; --ArgIndex) {
@@ -56,11 +80,9 @@ FThunkPtr GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, Fun
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest) {
+FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     asmjit::CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     asmjit::x86::Compiler TheCompiler { &Code };
 
     asmjit::InvokeNode* Invoker{};
@@ -115,14 +137,12 @@ FThunkPtr GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, Fu
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest) {
+FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
     CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
 
     const auto ShadowArgSpace = Dest.Detail().arg_stack_size();
@@ -143,43 +163,7 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
     const auto ContextPtr = ptr(rsp, ShadowArgSpace + Pad);
     const auto RspInitial = ContextPtr.clone_adjusted(RegisterCtxSpace + 8);
 
-#define GpMov(reg) TheAssembler.mov(ContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
-    GpMov(rax);
-    GpMov(rcx);
-    GpMov(rdx);
-    GpMov(r8);
-    GpMov(r9);
-    GpMov(r10);
-    GpMov(r11);
-    GpMov(r12);
-    GpMov(r13);
-    GpMov(r14);
-    GpMov(r15);
-    GpMov(rsi);
-    GpMov(rdi);
-    GpMov(rbx);
-#undef GpMov
-#define VecMov(reg) TheAssembler.movdqu(ContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
-    VecMov(xmm0);
-    VecMov(xmm1);
-    VecMov(xmm2);
-    VecMov(xmm3);
-    VecMov(xmm4);
-    VecMov(xmm5);
-    VecMov(xmm6);
-    VecMov(xmm7);
-    VecMov(xmm8);
-    VecMov(xmm9);
-    VecMov(xmm10);
-    VecMov(xmm11);
-    VecMov(xmm12);
-    VecMov(xmm13);
-    VecMov(xmm14);
-    VecMov(xmm15);
-#undef VecMov
-    TheAssembler.pushfq();
-    TheAssembler.pop(GpScratchReg);
-    TheAssembler.mov(ContextPtr.clone_adjusted(offsetof(RegisterContext, rflags)), GpScratchReg);
+    SaveRegisterContext(TheAssembler, ContextPtr, GpScratchReg);
 
     TheAssembler.lea(gpq(FuncArgInfo{FuncSignature::build<void, RegisterContext*>()}.Detail().arg(0).reg_id()), ContextPtr);
     TheAssembler.call(&RegisterContextStack::Push);
@@ -262,21 +246,23 @@ FThunkPtr GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgI
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type) {
+FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
     CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
     auto DestInfo = FuncArgInfo{FuncSignature::build<void, void*, ArgumentContext&>()};
     auto SrcInfo = FuncArgInfo{SourceSignature};
 
     const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
+    if (Type != EBindingThunkType::Argument && Type != EBindingThunkType::ArgumentAndRegister) {
+        throw std::invalid_argument("ArgumentContext binding callbacks require Argument or ArgumentAndRegister binding types.");
+    }
+
     auto CtxSpace = ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size());
-    if (Type == EBindingThunkType::WithRegisterContext) CtxSpace += sizeof(RegisterContext);
+    if (Type == EBindingThunkType::ArgumentAndRegister) CtxSpace += sizeof(RegisterContext);
     auto SumSpace = ShadowArgSpace + CtxSpace;
     const auto Pad = (SumSpace % 16 == 8) ? 0 : 8;
     SumSpace += Pad;
@@ -289,55 +275,23 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
     const auto RspInitial = ArgContextPtr.clone_adjusted(CtxSpace + 8);
 
     // start by saving registers at the tail end of the data part of ArgumentContext, if needed
-    if (Type == EBindingThunkType::WithRegisterContext) {
-        //todo can probably just iterate through the map
-    #define GpMov(reg) TheAssembler.mov(RegContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
-            GpMov(rax);
-            GpMov(rcx);
-            GpMov(rdx);
-            GpMov(r8);
-            GpMov(r9);
-            GpMov(r10);
-            GpMov(r11);
-            GpMov(r12);
-            GpMov(r13);
-            GpMov(r14);
-            GpMov(r15);
-            GpMov(rsi);
-            GpMov(rdi);
-            GpMov(rbx);
-    #undef GpMov
-    #define VecMov(reg) TheAssembler.movdqu(RegContextPtr.clone_adjusted(offsetof(RegisterContext, reg)), reg)
-            VecMov(xmm0);
-            VecMov(xmm1);
-            VecMov(xmm2);
-            VecMov(xmm3);
-            VecMov(xmm4);
-            VecMov(xmm5);
-            VecMov(xmm6);
-            VecMov(xmm7);
-            VecMov(xmm8);
-            VecMov(xmm9);
-            VecMov(xmm10);
-            VecMov(xmm11);
-            VecMov(xmm12);
-            VecMov(xmm13);
-            VecMov(xmm14);
-            VecMov(xmm15);
-    #undef VecMov
-        TheAssembler.pushfq();
-        TheAssembler.pop(GpScratchReg);
-        TheAssembler.mov(RegContextPtr.clone_adjusted(offsetof(RegisterContext, rflags)), GpScratchReg);
+    if (Type == EBindingThunkType::ArgumentAndRegister) {
+        SaveRegisterContext(TheAssembler, RegContextPtr, GpScratchReg);
     }
+
+    StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), 0, GpScratchReg);
+    StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::ReturnValueOffset), 0, GpScratchReg);
+    StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::ArgsCountOffset), SrcInfo.GetArguments().size(), GpScratchReg);
 
     // push arguments into structure
     for (auto Index = 0; auto& FuncValue : SrcInfo.GetArguments()) {
+        const auto ArgumentOffset = GetArgumentContextOffset(Index++);
         if (FuncValue.is_reg()) {
             if (TypeUtils::is_int(FuncValue.type_id())) {
-                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), gpq(FuncValue.reg_id()));
+                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentOffset), gpq(FuncValue.reg_id()));
             }
             else if (TypeUtils::is_float(FuncValue.type_id())) {
-                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), xmm(FuncValue.reg_id()));
+                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentOffset), xmm(FuncValue.reg_id()));
             }
             else {
                 // todo return error
@@ -347,11 +301,11 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
         else {
             if (TypeUtils::is_int(FuncValue.type_id())) {
                 TheAssembler.mov(GpScratchReg, RspInitial.clone_adjusted(FuncValue.stack_offset()));
-                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), GpScratchReg);
+                TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentOffset), GpScratchReg);
             }
             else if (TypeUtils::is_float(FuncValue.type_id())) {
                 TheAssembler.movq(XmmScratchReg, RspInitial.clone_adjusted(FuncValue.stack_offset()));
-                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())), XmmScratchReg);
+                TheAssembler.movq(ArgContextPtr.clone_adjusted(ArgumentOffset), XmmScratchReg);
             }
             else {
                 // todo return error
@@ -361,12 +315,13 @@ FThunkPtr GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindP
     }
 
     // set flags if needed
-    auto Flag = (SrcInfo.GetReturnValues().empty() ? 0 : 1) | (Type == EBindingThunkType::Default ? 0 : 2);
-    if (Flag) TheAssembler.mov(ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), Flag);
+    auto Flag = (SrcInfo.GetReturnValues().empty() ? 0 : ArgumentContext::HasReturnValueFlag) |
+        (Type == EBindingThunkType::ArgumentAndRegister ? ArgumentContext::HasRegisterContextFlag : 0);
+    StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), Flag, GpScratchReg);
 
     // call function
-    TheAssembler.mov(gpq(SrcInfo.Detail().arg(0).reg_id()), BindParam);
-    TheAssembler.lea(gpq(SrcInfo.Detail().arg(1).reg_id()), ArgContextPtr);
+    TheAssembler.mov(gpq(DestInfo.Detail().arg(0).reg_id()), BindParam);
+    TheAssembler.lea(gpq(DestInfo.Detail().arg(1).reg_id()), ArgContextPtr);
     TheAssembler.call(ToFn);
 
     // if there's a return value, make sure it's in the right register. we don't support return types that take multiple registers or other weirdness

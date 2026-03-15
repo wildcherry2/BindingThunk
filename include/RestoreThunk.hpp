@@ -1,18 +1,14 @@
 #pragma once
 #include "Common.hpp"
+#include "BindingThunk.hpp"
 
-FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature);
+// Restore thunks are only valid for non-default binding modes.
+FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, bool bLogAssembly = false);
 
 template<typename InReturnType, typename... InArgs>
-FThunkPtr GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...)) {
+FThunkPtr GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThunkType BindingType, const bool bLogAssembly = false) {
     return GenerateRestoreThunk(reinterpret_cast<void*>(CallTo),
-        FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
-}
-
-FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe = false);
-
-template<typename InReturnType, typename... InArgs>
-FThunkPtr GenerateRestoreThunkForArgumentContext(InReturnType(*CallTo)(InArgs...), bool bSafe = false) {
-    return GenerateRestoreThunkForArgumentContext(reinterpret_cast<void*>(CallTo),
-        FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>());
+        FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
+        BindingType,
+        bLogAssembly);
 }

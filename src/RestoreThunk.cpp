@@ -1,14 +1,62 @@
 #include "RestoreThunk.hpp"
 #include "Context.hpp"
 
-FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
+#include <stdexcept>
+
+static FThunkPtr GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
+static FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);
+
+static int32_t GetArgumentContextOffset(const size_t Index) {
+    return static_cast<int32_t>(ArgumentContext::ArgumentSize * Index);
+}
+
+static void SaveNonVolatileRegisters(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& GpPtr, const asmjit::x86::Mem& VecPtr) {
+    auto Offset = 0;
+    for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
+        TheAssembler.mov(GpPtr.clone_adjusted(Offset), PlatformNonVolatileGpReg);
+        Offset += 8;
+    }
+    Offset = 0;
+    for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
+        TheAssembler.movdqu(VecPtr.clone_adjusted(Offset), PlatformNonVolatileVecReg);
+        Offset += 16;
+    }
+}
+
+static void RestoreNonVolatileRegisters(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& GpPtr, const asmjit::x86::Mem& VecPtr) {
+    auto Offset = 0;
+    for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
+        TheAssembler.mov(PlatformNonVolatileGpReg, GpPtr.clone_adjusted(Offset));
+        Offset += 8;
+    }
+    Offset = 0;
+    for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
+        TheAssembler.movdqu(PlatformNonVolatileVecReg, VecPtr.clone_adjusted(Offset));
+        Offset += 16;
+    }
+}
+
+FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
+    switch (BindingType) {
+        case EBindingThunkType::Default:
+            throw std::invalid_argument("Default binding thunks do not require a restore thunk.");
+        case EBindingThunkType::Argument:
+            return GenerateRestoreThunkForArgumentContext(CallTo, Signature, false, bLogAssembly);
+        case EBindingThunkType::Register:
+            return GenerateRestoreThunkForRegisterContext(CallTo, Signature, bLogAssembly);
+        case EBindingThunkType::ArgumentAndRegister:
+            return GenerateRestoreThunkForArgumentContext(CallTo, Signature, true, bLogAssembly);
+        default:
+            return nullptr;
+    }
+}
+
+FThunkPtr GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
     CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
     FuncArgInfo ArgInfo { Signature };
 
@@ -56,16 +104,7 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
 
     // restore context, except for arg registers
     // start with pushing nv-registers, since we'll have to restore them after the call
-    {
-        int Index = 0;
-        for (auto& Register : GetPlatformNonVolatileGpRegs()) {
-            TheAssembler.mov(NVIntRegPtr.clone_adjusted(8 * Index++), Register);
-        }
-        Index = 0;
-        for (auto& Register : GetPlatformNonVolatileVecRegs()) {
-            TheAssembler.movdqu(NVFltRegPtr.clone_adjusted(16 * Index++), Register);
-        }
-    }
+    SaveNonVolatileRegisters(TheAssembler, NVIntRegPtr, NVFltRegPtr);
 
     // move arguments on the stack to new stack slot for the call (already allocated)
     for (auto& Arg: ArgInfo.GetArguments()) {
@@ -112,16 +151,7 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     TheAssembler.call(CallTo);
 
     // restore nv-registers
-    {
-        int Index = 0;
-        for (auto& Register : GetPlatformNonVolatileGpRegs()) {
-            TheAssembler.mov(Register, NVIntRegPtr.clone_adjusted(8 * Index++));
-        }
-        Index = 0;
-        for (auto& Register : GetPlatformNonVolatileVecRegs()) {
-            TheAssembler.movdqu(Register, NVFltRegPtr.clone_adjusted(16 * Index++));
-        }
-    }
+    RestoreNonVolatileRegisters(TheAssembler, NVIntRegPtr, NVFltRegPtr);
 
     // now we're done, deallocate and return
     TheAssembler.add(rsp, SumSpace);
@@ -133,14 +163,12 @@ FThunkPtr GenerateRestoreThunk(void* CallTo, FuncSignature Signature) {
     return FThunkPtr { Temp };
 }
 
-FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe) {
+FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
     CodeHolder Code{};
-    Code.set_logger(GetLogger());
-    Code.set_error_handler(GetErrorHandler());
-    Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
+    InitializeCodeHolder(Code, bLogAssembly);
     Assembler TheAssembler { &Code };
 
     auto SrcInfo = FuncArgInfo{FuncSignature::build<void, ArgumentContext&>()};
@@ -158,31 +186,28 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
 
     // save nonvolatiles
     if (bSafe) {
-        auto Offset = 0;
-        for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
-            TheAssembler.mov(NVPtr.clone_adjusted(Offset), PlatformNonVolatileGpReg);
-            Offset += 8;
-        }
-        for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
-            TheAssembler.movdqu(NVPtr.clone_adjusted(Offset), PlatformNonVolatileVecReg);
-            Offset += 16;
-        }
+        SaveNonVolatileRegisters(TheAssembler, NVPtr, NVPtr.clone_adjusted(GetPlatformNonVolatileGpRegs().size() * 8));
     }
 
     const auto ContextReg = SrcInfo.GetArgumentIntegralRegisters()[0];
     const auto ContextPtr = ptr(ContextReg);
-    const auto ArgContextPtr = ContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize);
+    const auto ArgContextPtr = ContextPtr.clone_adjusted(ArgumentContext::ArgsOffset);
+    int32_t DeferredContextArgOffset = -1;
 
     // move arguments from context to call position, excluding ContextReg
     for (auto Index = 0; auto& FuncValue : DestInfo.GetArguments()) {
+        const auto ArgumentOffset = GetArgumentContextOffset(Index++);
         if (FuncValue.is_reg()) {
             if (TypeUtils::is_int(FuncValue.type_id())) {
                 auto reg = gpq(FuncValue.reg_id());
-                if (reg == ContextReg) continue;
-                TheAssembler.mov(reg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                if (reg == ContextReg) {
+                    DeferredContextArgOffset = ArgumentOffset;
+                    continue;
+                }
+                TheAssembler.mov(reg, ArgContextPtr.clone_adjusted(ArgumentOffset));
             }
             else if (TypeUtils::is_float(FuncValue.type_id())) {
-                TheAssembler.movq(xmm(FuncValue.reg_id()), ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                TheAssembler.movq(xmm(FuncValue.reg_id()), ArgContextPtr.clone_adjusted(ArgumentOffset));
             }
             else {
                 // todo return error
@@ -191,11 +216,11 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
         }
         else {
             if (TypeUtils::is_int(FuncValue.type_id())) {
-                TheAssembler.mov(GpScratchReg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                TheAssembler.mov(GpScratchReg, ArgContextPtr.clone_adjusted(ArgumentOffset));
                 TheAssembler.mov(ptr(rsp, FuncValue.stack_offset()), GpScratchReg);
             }
             else if (TypeUtils::is_float(FuncValue.type_id())) {
-                TheAssembler.movq(XmmScratchReg, ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (Index++ * SrcInfo.GetArguments().size())));
+                TheAssembler.movq(XmmScratchReg, ArgContextPtr.clone_adjusted(ArgumentOffset));
                 TheAssembler.movq(ptr(rsp, FuncValue.stack_offset()), XmmScratchReg);
             }
             else {
@@ -228,20 +253,16 @@ FThunkPtr GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature Des
         }
     }
 
+    if (DeferredContextArgOffset >= 0) {
+        TheAssembler.mov(ContextReg, ArgContextPtr.clone_adjusted(DeferredContextArgOffset));
+    }
+
     // make the call
     TheAssembler.call(CallTo);
 
     // restore nonvolatile registers if needed
     if (bSafe) {
-        auto Offset = 0;
-        for (auto& PlatformNonVolatileGpReg : GetPlatformNonVolatileGpRegs()) {
-            TheAssembler.mov(PlatformNonVolatileGpReg, NVPtr.clone_adjusted(Offset));
-            Offset += 8;
-        }
-        for (auto& PlatformNonVolatileVecReg : GetPlatformNonVolatileVecRegs()) {
-            TheAssembler.movdqu(PlatformNonVolatileVecReg, NVPtr.clone_adjusted(Offset));
-            Offset += 16;
-        }
+        RestoreNonVolatileRegisters(TheAssembler, NVPtr, NVPtr.clone_adjusted(GetPlatformNonVolatileGpRegs().size() * 8));
     }
 
     TheAssembler.add(rsp, SumSpace);
