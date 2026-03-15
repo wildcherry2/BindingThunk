@@ -7,13 +7,14 @@ namespace RC::Thunk {
 
 thread_local RegisterContext* RegisterContextArray[256];
 thread_local int RegisterContextStackIndex = -1;
+using RegisterContextStackFatalHandler = void(*)(const char* Message);
 
 static void DefaultRegisterContextStackFatalHandler(const char* Message) {
     std::cerr << Message << std::endl;
     std::terminate();
 }
 
-static FRegisterContextStackFatalHandler GRegisterContextStackFatalHandler = &DefaultRegisterContextStackFatalHandler;
+static RegisterContextStackFatalHandler GRegisterContextStackFatalHandler = &DefaultRegisterContextStackFatalHandler;
 
 [[noreturn]] static void HandleRegisterContextStackFatal(const char* Message) {
     GRegisterContextStackFatalHandler(Message);
