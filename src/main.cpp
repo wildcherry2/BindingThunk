@@ -48,5 +48,4 @@ int main() {
     return 0;
 }
 
-//todo explicitly block thunks that don't tail call and return a value > 64 bits or a value < 64 bits that isn't pod
 //todo check if return values that are on the stack are calculated by asmjit
