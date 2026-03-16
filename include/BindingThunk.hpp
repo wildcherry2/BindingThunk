@@ -2,7 +2,7 @@
 #include "Common.hpp"
 #include "Context.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 // Binds a pointer to a function at runtime.
 THUNK_API FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default, bool bLogAssembly = false);

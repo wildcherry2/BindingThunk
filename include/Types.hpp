@@ -3,7 +3,7 @@
 #include <type_traits>
 #include <cstddef>
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 namespace Detail {
     template<typename T>

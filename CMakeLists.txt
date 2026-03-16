@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 4.1)
-project(Thunk LANGUAGES CXX)
+project(BindingThunk LANGUAGES CXX)
 
 include(FetchContent)
 
-option(THUNK_BUILD_SHARED "Build Thunk as a shared library" OFF)
+option(THUNK_BUILD_SHARED "Build BindingThunk as a shared library" OFF)
 option(THUNK_BUILD_EXAMPLE "Build the example executable" OFF)
 option(THUNK_BUILD_TESTS "Build the unit tests" OFF)
 
@@ -41,10 +41,10 @@ if (THUNK_BUILD_SHARED)
     set(THUNK_LIBRARY_TYPE SHARED)
 endif ()
 
-add_library(Thunk ${THUNK_LIBRARY_TYPE})
-add_library(Thunk::Thunk ALIAS Thunk)
+add_library(BindingThunk ${THUNK_LIBRARY_TYPE})
+add_library(BindingThunk::BindingThunk ALIAS BindingThunk)
 
-target_sources(Thunk
+target_sources(BindingThunk
     PRIVATE
         ${THUNK_SOURCES}
     PUBLIC
@@ -53,24 +53,24 @@ target_sources(Thunk
         FILES ${THUNK_PUBLIC_HEADERS}
 )
 
-target_include_directories(Thunk
+target_include_directories(BindingThunk
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(Thunk
+target_link_libraries(BindingThunk
     PUBLIC
         asmjit
 )
 
-target_compile_features(Thunk PUBLIC cxx_std_23)
-target_compile_definitions(Thunk
+target_compile_features(BindingThunk PUBLIC cxx_std_23)
+target_compile_definitions(BindingThunk
     PUBLIC
         _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 )
 
 if (THUNK_BUILD_SHARED)
-    target_compile_definitions(Thunk
+    target_compile_definitions(BindingThunk
         PUBLIC
             THUNK_SHARED
         PRIVATE
@@ -79,14 +79,14 @@ if (THUNK_BUILD_SHARED)
 endif ()
 
 if (THUNK_BUILD_EXAMPLE)
-    add_executable(ThunkExample src/main.cpp)
-    target_link_libraries(ThunkExample PRIVATE Thunk::Thunk)
-    target_compile_features(ThunkExample PRIVATE cxx_std_23)
+    add_executable(BindingThunkExample src/main.cpp)
+    target_link_libraries(BindingThunkExample PRIVATE BindingThunk::BindingThunk)
+    target_compile_features(BindingThunkExample PRIVATE cxx_std_23)
 endif ()
 
 if (THUNK_BUILD_TESTS)
     enable_testing()
-    target_compile_definitions(Thunk PUBLIC THUNK_ENABLE_TEST_HOOKS)
+    target_compile_definitions(BindingThunk PUBLIC THUNK_ENABLE_TEST_HOOKS)
 
     FetchContent_Declare(
         googletest
@@ -96,13 +96,13 @@ if (THUNK_BUILD_TESTS)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
-    add_executable(ThunkTests
+    add_executable(BindingThunkTests
         include/Tests.hpp
         src/Tests.cpp
     )
-    target_link_libraries(ThunkTests PRIVATE Thunk::Thunk GTest::gtest)
-    target_compile_features(ThunkTests PRIVATE cxx_std_23)
+    target_link_libraries(BindingThunkTests PRIVATE BindingThunk::BindingThunk GTest::gtest)
+    target_compile_features(BindingThunkTests PRIVATE cxx_std_23)
 
     include(GoogleTest)
-    gtest_discover_tests(ThunkTests)
+    gtest_discover_tests(BindingThunkTests)
 endif ()

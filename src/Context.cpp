@@ -3,7 +3,7 @@
 #include <exception>
 #include <iostream>
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 thread_local RegisterContext* RegisterContextArray[256];
 thread_local int RegisterContextStackIndex = -1;

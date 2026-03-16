@@ -2,7 +2,7 @@
 #include "Context.hpp"
 #include <vector>
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgsOffset + (ArgumentContext::ArgumentSize * Index));

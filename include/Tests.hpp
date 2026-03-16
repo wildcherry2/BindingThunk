@@ -3,7 +3,7 @@
 #include "BindingThunk.hpp"
 #include "RestoreThunk.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 template<typename FnType>
 FnType ThunkCast(const FThunkPtr& Thunk) {

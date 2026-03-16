@@ -1,7 +1,7 @@
 #include "RestoreThunk.hpp"
 #include "Context.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 static FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
 static FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);

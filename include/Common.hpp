@@ -11,7 +11,7 @@
 #include <functional>
 #include "Types.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 #if defined(_WIN32)
 #  if defined(THUNK_SHARED)

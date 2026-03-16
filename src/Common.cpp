@@ -19,7 +19,7 @@
 #include <Windows.h>
 #endif
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 std::wstring WideFromUtf8(const std::string_view Message) {
     std::wstring_convert<std::codecvt_utf8<wchar_t>> Converter;

@@ -6,7 +6,7 @@
 #include "BindingThunk.hpp"
 #include "RestoreThunk.hpp"
 
-using namespace RC::Thunk;
+using namespace BindingThunk;
 
 FThunkPtr complexrestore{};
 static double testcomplexfn(void* bound, double p0, int p1, float p2, float p3, int64_t p4, int64_t p5, double p6, double p7) {

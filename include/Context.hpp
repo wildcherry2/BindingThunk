@@ -6,7 +6,7 @@
 #include "Common.hpp"
 #include "Hashes.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 struct THUNK_API RegisterContext {
     uint64_t rflags, rax, rcx, rdx, r8, r9, r10, r11, r12, r13, r14, r15, rdi, rsi, rbx;

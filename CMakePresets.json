@@ -24,13 +24,13 @@
       "name": "debug-static",
       "inherits": "base",
       "displayName": "Debug Static Library",
-      "description": "Build the default static Thunk library in Debug."
+      "description": "Build the default static BindingThunk library in Debug."
     },
     {
       "name": "debug-static-tests",
       "inherits": "debug-static",
       "displayName": "Debug Static Library With Tests",
-      "description": "Build the default static Thunk library and unit tests in Debug.",
+      "description": "Build the default static BindingThunk library and unit tests in Debug.",
       "cacheVariables": {
         "THUNK_BUILD_TESTS": "ON"
       }
@@ -39,7 +39,7 @@
       "name": "debug-static-example",
       "inherits": "debug-static",
       "displayName": "Debug Static Library With Example",
-      "description": "Build the default static Thunk library and example executable in Debug.",
+      "description": "Build the default static BindingThunk library and example executable in Debug.",
       "cacheVariables": {
         "THUNK_BUILD_EXAMPLE": "ON"
       }
@@ -48,7 +48,7 @@
       "name": "debug-shared",
       "inherits": "base",
       "displayName": "Debug Shared Library",
-      "description": "Build Thunk as a shared library in Debug.",
+      "description": "Build BindingThunk as a shared library in Debug.",
       "cacheVariables": {
         "THUNK_BUILD_SHARED": "ON"
       }
@@ -57,7 +57,7 @@
       "name": "debug-shared-tests",
       "inherits": "debug-shared",
       "displayName": "Debug Shared Library With Tests",
-      "description": "Build Thunk as a shared library with unit tests in Debug.",
+      "description": "Build BindingThunk as a shared library with unit tests in Debug.",
       "cacheVariables": {
         "THUNK_BUILD_TESTS": "ON"
       }
@@ -66,7 +66,7 @@
       "name": "debug-shared-example",
       "inherits": "debug-shared",
       "displayName": "Debug Shared Library With Example",
-      "description": "Build Thunk as a shared library with the example executable in Debug.",
+      "description": "Build BindingThunk as a shared library with the example executable in Debug.",
       "cacheVariables": {
         "THUNK_BUILD_EXAMPLE": "ON"
       }
@@ -75,7 +75,7 @@
       "name": "release-static",
       "inherits": "base",
       "displayName": "Release Static Library",
-      "description": "Build the default static Thunk library in Release.",
+      "description": "Build the default static BindingThunk library in Release.",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
@@ -84,7 +84,7 @@
       "name": "release-shared",
       "inherits": "base",
       "displayName": "Release Shared Library",
-      "description": "Build Thunk as a shared library in Release.",
+      "description": "Build BindingThunk as a shared library in Release.",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "THUNK_BUILD_SHARED": "ON"

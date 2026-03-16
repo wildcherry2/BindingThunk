@@ -17,7 +17,7 @@
 #include <Windows.h>
 #endif
 
-using namespace RC::Thunk;
+using namespace BindingThunk;
 
 static FThunkPtr GRestoreThunk{};
 

@@ -2,7 +2,7 @@
 #include "Common.hpp"
 #include "BindingThunk.hpp"
 
-namespace RC::Thunk {
+namespace BindingThunk {
 
 // Restore thunks are only valid for non-default binding modes.
 THUNK_API FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, bool bLogAssembly = false);
