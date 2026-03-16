@@ -1,6 +1,7 @@
 #include <iostream>
 #include <ostream>
 #include <format>
+#include <stacktrace>
 
 #include "BindingThunk.hpp"
 #include "RestoreThunk.hpp"
@@ -18,6 +19,8 @@ static double testcomplexfn(void* bound, double p0, int p1, float p2, float p3, 
 static double testcomplexfnoriginal(double p0, int p1, float p2, float p3, int64_t p4, int64_t p5, double p6, double p7) {
     std::cout << std::format("unbound p0:{}\np1:{}\np2:{}\np3:{}\np4:{}\np5:{}\np6:{}\np7:{}\n",
         p0, p1, p2, p3, p4, p5, p6, p7) << std::endl;
+
+    std::cout << std::stacktrace::current() << std::endl;
 
     return p0 + p1 + p2 + p3 + p4 + p5 + p6 + p7;
 }

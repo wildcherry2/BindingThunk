@@ -1031,9 +1031,39 @@ TEST(BindingThunkTests, RegisterRestoreThunkRegistersWindowsUnwindInfo) {
     EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
 }
 
+TEST(BindingThunkTests, RegisterBindingThunkRegistersWindowsUnwindInfo) {
+    RegisterStackShiftState Binder{};
+    auto BindThunkResult = GenerateBindingThunk(&RegisterStackShiftCallback, &Binder, EBindingThunkType::Register);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+
+    auto BindThunk = std::move(BindThunkResult.value());
+    const auto Address = BindThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    BindThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
 TEST(BindingThunkTests, ArgumentBindingThunkRegistersWindowsUnwindInfo) {
     ArgumentNoArgBinder Binder{};
     auto BindThunkResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Argument);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+
+    auto BindThunk = std::move(BindThunkResult.value());
+    const auto Address = BindThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    BindThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
+TEST(BindingThunkTests, ArgumentAndRegisterBindingThunkRegistersWindowsUnwindInfo) {
+    ArgumentRegisterLargeBinder Binder{};
+    auto BindThunkResult = GenerateBindingThunk<ArgumentRegisterLargeBinder, int*, int, int&, int*, double, double&, double*>(
+        &ArgumentRegisterLargeCallback,
+        &Binder,
+        EBindingThunkType::ArgumentAndRegister
+    );
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
 
     auto BindThunk = std::move(BindThunkResult.value());
@@ -1058,6 +1088,30 @@ TEST(BindingThunkTests, ComplexBindingThunkRegistersWindowsUnwindInfo) {
     ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
 
     BindThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
+TEST(BindingThunkTests, ArgumentRestoreThunkRegistersWindowsUnwindInfo) {
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentNoArgs, EBindingThunkType::Argument);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+
+    auto RestoreThunk = std::move(RestoreThunkResult.value());
+    const auto Address = RestoreThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    RestoreThunk.reset();
+    EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
+}
+
+TEST(BindingThunkTests, ArgumentAndRegisterRestoreThunkRegistersWindowsUnwindInfo) {
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentRegisterLarge, EBindingThunkType::ArgumentAndRegister);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+
+    auto RestoreThunk = std::move(RestoreThunkResult.value());
+    const auto Address = RestoreThunk.get();
+    ASSERT_NE(LookupThunkRuntimeFunction(Address), nullptr);
+
+    RestoreThunk.reset();
     EXPECT_EQ(LookupThunkRuntimeFunction(Address), nullptr);
 }
 #endif

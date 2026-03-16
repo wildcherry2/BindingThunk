@@ -38,20 +38,24 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     const auto UnwindInfoLabel = TheAssembler.new_label();
 #endif
     FuncArgInfo ArgInfo { Signature };
+    auto SavedNonVolatileGpRegs = GetPlatformNonVolatileGpRegs();
+    auto SavedNonVolatileVecRegs = GetPlatformNonVolatileVecRegs();
 
     // allocate locals with shadow space for calls (call to 'CallTo' will always take the most space so we use ArgInfo.Detail().arg_stack_size())
     // we'll need space for all nonvolatile registers and argument registers in addition to the shadow/arg space + alignment.
     const auto ShadowArgSpace = ArgInfo.Detail().arg_stack_size();
-    const auto NVFltRegSpace = GetPlatformNonVolatileVecRegs().size() * 16;
+    const auto NVFltRegSpace = static_cast<uint32_t>(SavedNonVolatileVecRegs.size() * sizeof(Xmm));
     const auto IntArgSpace = ArgInfo.GetArgumentIntegralRegisters().size() * 8;
     const auto FltArgSpace = ArgInfo.GetArgumentFloatingRegisters().size() * 16;
     const auto SavedVecOffset = static_cast<uint32_t>((ShadowArgSpace + IntArgSpace + FltArgSpace + 15) & ~uint32_t(15));
 #if defined(_WIN64)
     TheAssembler.bind(BeginLabel);
 #endif
+    // This frame temporarily clobbers all platform nonvolatiles while reconstructing the captured register context,
+    // so the prolog/epilog must save and restore the complete preserved set.
     const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
-        .PushedGpRegs = GetPlatformNonVolatileGpRegs(),
-        .SavedVecRegs = GetPlatformNonVolatileVecRegs(),
+        .PushedGpRegs = std::move(SavedNonVolatileGpRegs),
+        .SavedVecRegs = std::move(SavedNonVolatileVecRegs),
         .RawStackAllocation = static_cast<uint32_t>(SavedVecOffset + NVFltRegSpace),
         .SavedVecOffset = SavedVecOffset,
     });
