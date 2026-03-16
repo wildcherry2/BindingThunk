@@ -19,7 +19,7 @@ template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const EBindingThunkType BindingType = EBindingThunkType::Default, const bool bLogAssembly = false) {
     return GenerateBindingThunk(reinterpret_cast<void*>(ToFn),
         reinterpret_cast<void*>(BindParam),
-        FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
+        FuncSignature::build<AsmJitCompatRetV<InReturnType>, AsmJitCompatArgV<InArgs>...>(),
         BindingType,
         bLogAssembly);
 }
@@ -28,7 +28,7 @@ THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&)
 
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Argument, const bool bLogAssembly = false) {
-    return GenerateBindingThunk(reinterpret_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(), Type, bLogAssembly);
+    return GenerateBindingThunk(reinterpret_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatRetV<InReturnType>, AsmJitCompatArgV<InArgs>...>(), Type, bLogAssembly);
 }
 
 }

@@ -9,6 +9,7 @@
 #include <optional>
 #include <cstddef>
 #include <functional>
+#include "Types.hpp"
 
 namespace RC::Thunk {
 
@@ -38,34 +39,6 @@ using asmjit::x86::Vec;
 using asmjit::FuncSignature;
 using asmjit::FuncDetail;
 using asmjit::x86::Assembler;
-
-#if defined(_WIN32)
-template<typename T>
-struct _AsmJitCompatibleArg
-{
-    using Type = std::conditional_t<std::is_class_v<T> || std::is_aggregate_v<T>,
-        std::conditional_t<sizeof(T) <= 8, uint64_t, void*>,
-        T>;
-};
-
-template<>
-struct _AsmJitCompatibleArg<void>
-{
-    using Type = void;
-};
-
-#else
-#warn "TODO: Define AsmJitCompatibleArg according to non-Windows calling conventions. Do not use templates for building thunks, use FuncSignature instead!"
-
-template<typename T>
-struct _AsmJitCompatibleArg<T>
-{
-    using Type = T;
-};
-#endif
-
-template<typename T>
-using AsmJitCompatibleArg = _AsmJitCompatibleArg<T>::Type;
 
 struct THUNK_API FThunkDeleter
 {

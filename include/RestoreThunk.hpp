@@ -10,7 +10,7 @@ THUNK_API FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signatur
 template<typename InReturnType, typename... InArgs>
 FThunkResult GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThunkType BindingType, const bool bLogAssembly = false) {
     return GenerateRestoreThunk(reinterpret_cast<void*>(CallTo),
-        FuncSignature::build<AsmJitCompatibleArg<InReturnType>, AsmJitCompatibleArg<InArgs>...>(),
+        FuncSignature::build<AsmJitCompatRetV<InReturnType>, AsmJitCompatArgV<InArgs>...>(),
         BindingType,
         bLogAssembly);
 }

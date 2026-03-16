@@ -26,6 +26,7 @@ set(THUNK_PUBLIC_HEADERS
     include/Context.hpp
     include/Hashes.hpp
     include/RestoreThunk.hpp
+    include/Types.hpp
 )
 
 set(THUNK_SOURCES
