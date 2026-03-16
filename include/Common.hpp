@@ -48,6 +48,14 @@ struct THUNK_API FThunkDeleter
 using FThunkPtr = std::unique_ptr<void, FThunkDeleter>;
 using LogFn = std::function<void(std::wstring_view)>;
 
+enum class EBindingThunkType
+{
+    Default, // Generates a simple binding thunk.
+    Argument, // Generates a binding thunk that compacts unbound arguments into an ArgumentContext. Generate a RestoreThunk to unwrap the ArgumentContext to call a function with an identical SourceSignature.
+    Register, // Generates a binding thunk that saves all non-argument registers to a side channel stack, and restores all non-argument registers to call a function in a corresponding RestoreThunk.
+    ArgumentAndRegister, // Combination of Argument and Register options. Compacts unbound arguments into an ArgumentContext and saves non-argument registers.
+};
+
 enum class EThunkErrorCode {
     InvalidBindingType,
     InvalidSignature,
@@ -62,7 +70,7 @@ enum class EThunkErrorCode {
     ArgumentContextOutOfBoundsArgumentIndex,
 };
 
-struct FThunkError {
+struct THUNK_API FThunkError {
     EThunkErrorCode Code{};
     std::wstring Message{};
 };
@@ -108,7 +116,7 @@ THUNK_API Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't u
 THUNK_API Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
 
 // borrowed from SafetyHook
-union Xmm {
+union THUNK_API Xmm {
     uint8_t u8[16];
     uint16_t u16[8];
     uint32_t u32[4];
@@ -119,7 +127,7 @@ union Xmm {
 
 THUNK_API auto GetJitRuntime() -> JitRuntime&;
 THUNK_API std::wstring WideFromUtf8(std::string_view Message);
-inline FThunkError MakeThunkError(const EThunkErrorCode Code, const std::string_view Message) {
+THUNK_API inline FThunkError MakeThunkError(const EThunkErrorCode Code, const std::string_view Message) {
     return FThunkError { Code, WideFromUtf8(Message) };
 }
 THUNK_API void InitializeCodeHolder(CodeHolder& Code, bool bLogAssembly = false);
@@ -130,14 +138,14 @@ THUNK_API auto GetErrorLogFunction() -> LogFn;
 THUNK_API auto SetLogFunction(LogFn fn) -> void;
 THUNK_API auto SetErrorLogFunction(LogFn fn) -> void;
 
-struct FManualThunkFramePlan {
+struct THUNK_API FManualThunkFramePlan {
     std::vector<Gp> PushedGpRegs{};
     std::vector<Vec> SavedVecRegs{};
     uint32_t RawStackAllocation{};
     uint32_t SavedVecOffset{};
 };
 
-struct FManualThunkFrameState {
+struct THUNK_API FManualThunkFrameState {
     FManualThunkFramePlan Plan{};
     uint32_t StackAllocation{};
     uint32_t PushBytes{};
@@ -153,7 +161,7 @@ struct FManualThunkFrameState {
 };
 
 #if defined(_WIN64)
-struct FThunkWindowsRuntimeInfo {
+struct THUNK_API FThunkWindowsRuntimeInfo {
     asmjit::Label BeginLabel{};
     asmjit::Label EndLabel{};
     asmjit::Label UnwindInfoLabel{};

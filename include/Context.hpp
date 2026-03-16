@@ -8,7 +8,7 @@
 
 namespace RC::Thunk {
 
-struct RegisterContext {
+struct THUNK_API RegisterContext {
     uint64_t rflags, rax, rcx, rdx, r8, r9, r10, r11, r12, r13, r14, r15, rdi, rsi, rbx;
     Xmm xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15;
 };
@@ -60,7 +60,7 @@ THUNK_API void SetRegisterContextStackFatalHandler(FRegisterContextStackFatalHan
 THUNK_API void ResetRegisterContextStackFatalHandler();
 #endif
 
-class ArgumentContext {
+class THUNK_API ArgumentContext {
 public:
     enum : uint64_t {
         HasReturnValueFlag = 1,
