@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <csetjmp>
 #include <cstring>
 #include <cstdint>
@@ -23,6 +24,39 @@ static FThunkPtr GRestoreThunk{};
 
 static std::jmp_buf GRegisterContextStackJumpBuffer{};
 static const char* GRegisterContextStackFatalMessage{};
+
+template<size_t Size>
+struct FByteValue {
+    std::array<std::byte, Size> Bytes {};
+
+    [[nodiscard]] auto operator==(const FByteValue& Other) const -> bool = default;
+};
+
+using FByteValue1 = FByteValue<1>;
+using FByteValue2 = FByteValue<2>;
+using FByteValue3 = FByteValue<3>;
+using FByteValue4 = FByteValue<4>;
+using FByteValue5 = FByteValue<5>;
+using FByteValue6 = FByteValue<6>;
+using FByteValue7 = FByteValue<7>;
+using FByteValue8 = FByteValue<8>;
+
+static_assert(sizeof(FByteValue1) == 1);
+static_assert(sizeof(FByteValue2) == 2);
+static_assert(sizeof(FByteValue3) == 3);
+static_assert(sizeof(FByteValue4) == 4);
+static_assert(sizeof(FByteValue5) == 5);
+static_assert(sizeof(FByteValue6) == 6);
+static_assert(sizeof(FByteValue7) == 7);
+static_assert(sizeof(FByteValue8) == 8);
+static_assert(!std::is_reference_v<AsmJitCompatArgV<FByteValue1>>);
+static_assert(!std::is_reference_v<AsmJitCompatArgV<FByteValue2>>);
+static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue3>>);
+static_assert(!std::is_reference_v<AsmJitCompatArgV<FByteValue4>>);
+static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue5>>);
+static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue6>>);
+static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue7>>);
+static_assert(!std::is_reference_v<AsmJitCompatArgV<FByteValue8>>);
 
 static void ThrowingRegisterContextStackFatalHandler(const char* Message) {
     GRegisterContextStackFatalMessage = Message;
@@ -56,6 +90,18 @@ static void WriteArgumentContextField(ArgumentContext& Context, const uint64_t O
     uint64_t Raw{};
     std::memcpy(&Raw, &Value, sizeof(T));
     std::memcpy(reinterpret_cast<std::byte*>(&Context) + Offset, &Raw, sizeof(Raw));
+}
+
+template<typename T>
+static void WriteArgumentContextSourceValue(ArgumentContext& Context, const uint64_t Offset, T& Value) {
+    using LoweredType = AsmJitCompatArgV<T>;
+    if constexpr (std::is_reference_v<LoweredType>) {
+        using PointedType = std::remove_reference_t<LoweredType>;
+        WriteArgumentContextField(Context, Offset, static_cast<PointedType*>(&Value));
+    }
+    else {
+        WriteArgumentContextField(Context, Offset, Value);
+    }
 }
 
 static std::string NarrowForTest(const std::wstring_view Message) {
@@ -475,19 +521,59 @@ TEST(ContextTests, GetArgumentAsSupportsQualifiedScalarTypes) {
     EXPECT_DOUBLE_EQ(Result.value(), 6.25);
 }
 
-TEST(ContextTests, GetArgumentAsSupportsNarrowScalarTypes) {
-    auto Storage = MakeArgumentContextStorage(2);
+TEST(ContextTests, GetArgumentAsSupportsAllPackedSizesAndAbiLoweredValueForms) {
+    auto Storage = MakeArgumentContextStorage(10);
     auto& Context = GetArgumentContext(Storage);
+    auto Value1 = FByteValue1 { { std::byte { 0x11 } } };
+    auto Value2 = FByteValue2 { { std::byte { 0x21 }, std::byte { 0x22 } } };
+    auto Value3 = FByteValue3 { { std::byte { 0x31 }, std::byte { 0x32 }, std::byte { 0x33 } } };
+    auto Value4 = FByteValue4 { { std::byte { 0x41 }, std::byte { 0x42 }, std::byte { 0x43 }, std::byte { 0x44 } } };
+    auto Value5 = FByteValue5 { { std::byte { 0x51 }, std::byte { 0x52 }, std::byte { 0x53 }, std::byte { 0x54 }, std::byte { 0x55 } } };
+    auto Value6 = FByteValue6 { { std::byte { 0x61 }, std::byte { 0x62 }, std::byte { 0x63 }, std::byte { 0x64 }, std::byte { 0x65 }, std::byte { 0x66 } } };
+    auto Value7 = FByteValue7 { { std::byte { 0x71 }, std::byte { 0x72 }, std::byte { 0x73 }, std::byte { 0x74 }, std::byte { 0x75 }, std::byte { 0x76 }, std::byte { 0x77 } } };
+    auto Value8 = FByteValue8 { { std::byte { 0x81 }, std::byte { 0x82 }, std::byte { 0x83 }, std::byte { 0x84 }, std::byte { 0x85 }, std::byte { 0x86 }, std::byte { 0x87 }, std::byte { 0x88 } } };
     const int32_t IntegerValue = -1234567;
     const float FloatValue = 3.25f;
 
-    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, IntegerValue);
-    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + ArgumentContext::ArgumentSize, FloatValue);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (0 * ArgumentContext::ArgumentSize), Value1);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (1 * ArgumentContext::ArgumentSize), Value2);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (2 * ArgumentContext::ArgumentSize), Value3);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (3 * ArgumentContext::ArgumentSize), Value4);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (4 * ArgumentContext::ArgumentSize), Value5);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (5 * ArgumentContext::ArgumentSize), Value6);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (6 * ArgumentContext::ArgumentSize), Value7);
+    WriteArgumentContextSourceValue(Context, ArgumentContext::ArgsOffset + (7 * ArgumentContext::ArgumentSize), Value8);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (8 * ArgumentContext::ArgumentSize), IntegerValue);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (9 * ArgumentContext::ArgumentSize), FloatValue);
 
-    const auto IntegerResult = Context.GetArgumentAs<int32_t>(0);
-    const auto FloatResult = Context.GetArgumentAs<float>(1);
+    const auto Value1Result = Context.GetArgumentAs<FByteValue1>(0);
+    const auto Value2Result = Context.GetArgumentAs<FByteValue2>(1);
+    const auto Value3Result = Context.GetArgumentAs<FByteValue3>(2);
+    const auto Value4Result = Context.GetArgumentAs<FByteValue4>(3);
+    const auto Value5Result = Context.GetArgumentAs<FByteValue5>(4);
+    const auto Value6Result = Context.GetArgumentAs<FByteValue6>(5);
+    const auto Value7Result = Context.GetArgumentAs<FByteValue7>(6);
+    const auto Value8Result = Context.GetArgumentAs<FByteValue8>(7);
+    const auto IntegerResult = Context.GetArgumentAs<int32_t>(8);
+    const auto FloatResult = Context.GetArgumentAs<float>(9);
+    ASSERT_TRUE(Value1Result.has_value());
+    ASSERT_TRUE(Value2Result.has_value());
+    ASSERT_TRUE(Value3Result.has_value());
+    ASSERT_TRUE(Value4Result.has_value());
+    ASSERT_TRUE(Value5Result.has_value());
+    ASSERT_TRUE(Value6Result.has_value());
+    ASSERT_TRUE(Value7Result.has_value());
+    ASSERT_TRUE(Value8Result.has_value());
     ASSERT_TRUE(IntegerResult.has_value());
     ASSERT_TRUE(FloatResult.has_value());
+    EXPECT_EQ(Value1Result.value(), Value1);
+    EXPECT_EQ(Value2Result.value(), Value2);
+    EXPECT_EQ(Value3Result.value(), Value3);
+    EXPECT_EQ(Value4Result.value(), Value4);
+    EXPECT_EQ(Value5Result.value(), Value5);
+    EXPECT_EQ(Value6Result.value(), Value6);
+    EXPECT_EQ(Value7Result.value(), Value7);
+    EXPECT_EQ(Value8Result.value(), Value8);
     EXPECT_EQ(IntegerResult.value(), IntegerValue);
     EXPECT_FLOAT_EQ(FloatResult.value(), FloatValue);
 }
@@ -539,6 +625,7 @@ TEST(ContextTests, SetReturnValueSupportsRawAndTypedWrites) {
     int Value = 13;
     const int32_t NarrowValue = -37;
     const float FloatValue = 4.75f;
+    const FByteValue3 OddSizedValue { { std::byte { 0xaa }, std::byte { 0xbb }, std::byte { 0xcc } } };
 
     Context.SetReturnValue(0xfeedfacecafebeefULL);
     EXPECT_EQ(ReadArgumentContextField<uint64_t>(Context, ArgumentContext::ReturnValueOffset), 0xfeedfacecafebeefULL);
@@ -551,6 +638,9 @@ TEST(ContextTests, SetReturnValueSupportsRawAndTypedWrites) {
 
     Context.SetReturnValue(FloatValue);
     EXPECT_FLOAT_EQ(ReadArgumentContextField<float>(Context, ArgumentContext::ReturnValueOffset), FloatValue);
+
+    Context.SetReturnValue(OddSizedValue);
+    EXPECT_EQ(ReadArgumentContextField<FByteValue3>(Context, ArgumentContext::ReturnValueOffset), OddSizedValue);
 }
 
 TEST(ContextTests, RegisterContextStackUnderflowInvokesFatalHandler) {

@@ -91,24 +91,26 @@ public:
     };
 
     /** @brief Reads a packed argument as type @p T.
-     *  @tparam T Target type to reinterpret from the stored 64-bit slot.
+     *  @tparam T Source-language argument type to reconstruct from the stored ABI-lowered slot.
      *  @param Index Zero-based packed argument index.
+     *  @details If the platform ABI lowered a by-value argument to an implicit reference, this method
+     *  dereferences the stored pointer and returns a copy of the original value. True reference
+     *  parameters should still be accessed explicitly through a pointer-like type.
      *  @return The requested value or @ref EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex if @p Index is invalid.
      */
     template<typename T>
     std::expected<T, EThunkErrorCode> GetArgumentAs(const uint64_t Index) const noexcept {
-        static_assert(sizeof(T) <= sizeof(uint64_t), "ArgumentContext only supports argument types up to 64 bits.");
+        static_assert(!std::is_reference_v<T>, "ArgumentContext::GetArgumentAs does not support reference types directly. Use a pointer-like type and dereference it explicitly.");
         if (Index >= _ArgsCount) {
             return std::unexpected(EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex);
         }
-        if constexpr (sizeof(T) == sizeof(uint64_t)) {
-            return std::bit_cast<T>(_Data[Index]);
+        using LoweredType = AsmJitCompatArgV<T>;
+        if constexpr (!std::is_reference_v<T> && std::is_reference_v<LoweredType>) {
+            using PointedType = std::remove_reference_t<LoweredType>;
+            return *ReadPackedValue<PointedType*>(_Data[Index]);
         }
         else {
-            static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable argument types.");
-            T Value {};
-            std::memcpy(&Value, &_Data[Index], sizeof(T));
-            return Value;
+            return ReadPackedValue<T>(_Data[Index]);
         }
     }
 
@@ -128,7 +130,16 @@ public:
     template<typename T>
     void SetReturnValue(const T value) noexcept {
         static_assert(sizeof(T) <= sizeof(uint64_t), "ArgumentContext only supports return types up to 64 bits.");
-        if constexpr (sizeof(T) == sizeof(uint64_t)) {
+        if constexpr (sizeof(T) == sizeof(uint8_t)) {
+            _ReturnValue = std::bit_cast<uint8_t>(value);
+        }
+        else if constexpr (sizeof(T) == sizeof(uint16_t)) {
+            _ReturnValue = std::bit_cast<uint16_t>(value);
+        }
+        else if constexpr (sizeof(T) == sizeof(uint32_t)) {
+            _ReturnValue = std::bit_cast<uint32_t>(value);
+        }
+        else if constexpr (sizeof(T) == sizeof(uint64_t)) {
             _ReturnValue = std::bit_cast<uint64_t>(value);
         }
         else {
@@ -146,6 +157,29 @@ public:
     inline static constexpr uint64_t ArgumentContextNonVariableSize = 24; ///< Size of the fixed header before the trailing packed argument array.
     inline static constexpr uint64_t ArgumentSize = sizeof(uint64_t); ///< Size in bytes of each packed argument slot.
 private:
+    template<typename T>
+    static T ReadPackedValue(const uint64_t Raw) noexcept {
+        static_assert(sizeof(T) <= sizeof(uint64_t), "ArgumentContext only supports packed values up to 64 bits.");
+        if constexpr (sizeof(T) == sizeof(uint8_t)) {
+            return std::bit_cast<T>(static_cast<uint8_t>(Raw));
+        }
+        else if constexpr (sizeof(T) == sizeof(uint16_t)) {
+            return std::bit_cast<T>(static_cast<uint16_t>(Raw));
+        }
+        else if constexpr (sizeof(T) == sizeof(uint32_t)) {
+            return std::bit_cast<T>(static_cast<uint32_t>(Raw));
+        }
+        else if constexpr (sizeof(T) == sizeof(uint64_t)) {
+            return std::bit_cast<T>(Raw);
+        }
+        else {
+            static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable packed values.");
+            T Value {};
+            std::memcpy(&Value, &Raw, sizeof(T));
+            return Value;
+        }
+    }
+
     uint64_t _Flags{}; ///< Context flags described by @ref HasReturnValueFlag and @ref HasRegisterContextFlag.
     uint64_t _ReturnValue{}; ///< Raw return value storage used by argument restore thunks.
     uint64_t _ArgsCount{}; ///< Number of valid entries in @ref _Data.
