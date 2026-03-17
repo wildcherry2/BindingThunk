@@ -1,3 +1,7 @@
+/** @file Common.cpp
+ *  @brief Implements shared runtime, logging, frame-layout, and Windows unwind helpers.
+ */
+
 #include "Common.hpp"
 
 #include <ranges>
@@ -21,16 +25,19 @@
 
 namespace BindingThunk {
 
+/** @copydoc WideFromUtf8 */
 std::wstring WideFromUtf8(const std::string_view Message) {
     std::wstring_convert<std::codecvt_utf8<wchar_t>> Converter;
     return Converter.from_bytes(Message.data(), Message.data() + Message.size());
 }
 
+/** @brief Aligns a manual thunk stack allocation so the emitted frame preserves ABI stack alignment. */
 static uint32_t AlignThunkStackAllocation(const uint32_t RawStackAllocation, const uint32_t PushBytes) {
     const auto Misalignment = (PushBytes + RawStackAllocation) % 16;
     return RawStackAllocation + ((8 + 16 - Misalignment) % 16);
 }
 
+/** @brief Default logger used for non-error assembly output. */
 LogFn StandardLogger = [](const std::wstring_view Message) {
     if (Message.empty()) return;
     if (Message.ends_with(L"\n")) {
@@ -41,6 +48,7 @@ LogFn StandardLogger = [](const std::wstring_view Message) {
     std::wcout << Message << std::endl;
 };
 
+/** @brief Default logger used for assembly and JIT errors. */
 LogFn ErrorLogger = [](const std::wstring_view Message) {
     if (Message.empty()) return;
     if (Message.ends_with(L"\n")) {
@@ -52,6 +60,7 @@ LogFn ErrorLogger = [](const std::wstring_view Message) {
 };
 
 #if defined(_WIN64)
+/** @brief Windows unwind opcode identifiers used to serialize manual unwind metadata. */
 enum : uint8_t {
     UWOP_PUSH_NONVOL = 0,
     UWOP_ALLOC_LARGE = 1,
@@ -62,6 +71,7 @@ enum : uint8_t {
     UWOP_SAVE_XMM128_FAR = 9,
 };
 
+/** @brief Prefix of a Windows x64 unwind-info record. */
 struct FWindowsUnwindInfoHeader {
     uint8_t VersionAndFlags{};
     uint8_t SizeOfProlog{};
@@ -69,11 +79,13 @@ struct FWindowsUnwindInfoHeader {
     uint8_t FrameRegisterAndOffset{};
 };
 
+/** @brief Two-byte unwind-code slot embedded in a Windows x64 unwind-info record. */
 struct FWindowsUnwindCodeSlot {
     uint8_t CodeOffset{};
     uint8_t UnwindOpAndOpInfo{};
 };
 
+/** @brief Expanded unwind operation used while constructing Windows unwind metadata. */
 struct FWindowsUnwindOperation {
     uint8_t CodeOffset{};
     uint8_t UnwindOp{};
@@ -85,27 +97,34 @@ struct FWindowsUnwindOperation {
 static_assert(sizeof(FWindowsUnwindInfoHeader) == 4);
 static_assert(sizeof(FWindowsUnwindCodeSlot) == 2);
 
+/** @brief Tracks unwind registration for a generated thunk so it can be removed on destruction. */
 struct FRegisteredThunkWindowsUnwind {
     void* Thunk{};
     RUNTIME_FUNCTION FunctionEntry{};
     FRegisteredThunkWindowsUnwind* Next{};
 };
 
+/** @brief Mutex guarding the linked list of registered thunk unwind entries. */
 static std::mutex GRegisteredThunkWindowsUnwindMutex{};
+/** @brief Head of the linked list containing all registered thunk unwind entries. */
 static FRegisteredThunkWindowsUnwind* GRegisteredThunkWindowsUnwindHead{};
 
+/** @brief Packs the version and flags fields of a Windows unwind-info header byte. */
 static constexpr uint8_t PackUnwindVersionAndFlags(const uint8_t Version, const uint8_t Flags) {
     return static_cast<uint8_t>((Version & 0x07u) | ((Flags & 0x1Fu) << 3));
 }
 
+/** @brief Packs the frame-register and scaled frame-offset fields of a Windows unwind-info header byte. */
 static constexpr uint8_t PackFrameRegisterAndOffset(const uint8_t FrameRegister, const uint8_t FrameOffsetScaled) {
     return static_cast<uint8_t>((FrameRegister & 0x0Fu) | ((FrameOffsetScaled & 0x0Fu) << 4));
 }
 
+/** @brief Packs an unwind opcode and operand into a Windows unwind-code slot byte. */
 static constexpr uint8_t PackUnwindOpAndInfo(const uint8_t UnwindOp, const uint8_t OpInfo) {
     return static_cast<uint8_t>((UnwindOp & 0x0Fu) | ((OpInfo & 0x0Fu) << 4));
 }
 
+/** @brief Creates an unwind operation that does not require extra payload slots. */
 static FWindowsUnwindOperation MakeUnwindOperation(const uint8_t CodeOffset, const uint8_t UnwindOp, const uint8_t OpInfo) {
     return FWindowsUnwindOperation {
         .CodeOffset = CodeOffset,
@@ -114,6 +133,7 @@ static FWindowsUnwindOperation MakeUnwindOperation(const uint8_t CodeOffset, con
     };
 }
 
+/** @brief Creates an unwind operation that carries a single 16-bit payload slot. */
 static FWindowsUnwindOperation MakeUnwindOperationWithSlot(
     const uint8_t CodeOffset,
     const uint8_t UnwindOp,
@@ -126,6 +146,7 @@ static FWindowsUnwindOperation MakeUnwindOperationWithSlot(
     return Operation;
 }
 
+/** @brief Creates an unwind operation that carries a split 32-bit payload across two extra slots. */
 static FWindowsUnwindOperation MakeUnwindOperationWithSplitOperand(
     const uint8_t CodeOffset,
     const uint8_t UnwindOp,
@@ -139,12 +160,14 @@ static FWindowsUnwindOperation MakeUnwindOperationWithSplitOperand(
     return Operation;
 }
 
+/** @brief Appends the raw bytes of a POD value to a byte buffer. */
 template<typename T>
 static void AppendStructBytes(std::vector<std::byte>& Buffer, const T& Value) {
     const auto* Bytes = reinterpret_cast<const std::byte*>(&Value);
     Buffer.insert(Buffer.end(), Bytes, Bytes + sizeof(T));
 }
 
+/** @brief Serializes a list of unwind operations into the Windows x64 unwind-info byte format. */
 static std::vector<std::byte> BuildWindowsUnwindInfo(
     const std::vector<FWindowsUnwindOperation>& Operations,
     const uint8_t FrameRegister = 0,
@@ -188,6 +211,7 @@ static std::vector<std::byte> BuildWindowsUnwindInfo(
     return Buffer;
 }
 
+/** @brief Registers a thunk with the Windows unwind runtime so exceptions can walk through generated code. */
 static std::optional<FThunkError> RegisterThunkWindowsUnwind(
     void* Thunk,
     CodeHolder& Code,
@@ -240,14 +264,17 @@ static std::optional<FThunkError> RegisterThunkWindowsUnwind(
     return std::nullopt;
 }
 
+/** @brief Returns the encoded byte length of a push for the specified general-purpose register. */
 static uint8_t GpPushInstructionSize(const uint32_t RegId) {
     return RegId < 8 ? 1 : 2;
 }
 
+/** @brief Returns the encoded byte length of a @c mov between two general-purpose registers. */
 static uint8_t GpMovInstructionSize(const uint32_t DstRegId, const uint32_t SrcRegId) {
     return (DstRegId >= 8 || SrcRegId >= 8) ? 4 : 3;
 }
 
+/** @brief Returns the encoded byte length of an @c lea from @c rsp with the specified displacement. */
 static uint8_t GpLeaFromRspInstructionSize(const uint32_t DstRegId, const uint32_t Offset) {
     const uint8_t RexBytes = DstRegId >= 8 ? 1 : 0;
     constexpr uint8_t OpcodeBytes = 1;
@@ -258,10 +285,12 @@ static uint8_t GpLeaFromRspInstructionSize(const uint32_t DstRegId, const uint32
     return static_cast<uint8_t>(RexBytes + OpcodeBytes + ModRmAndSibBytes + 4);
 }
 
+/** @brief Returns the encoded byte length of @c sub rsp, imm for the requested allocation. */
 static uint8_t SubRspInstructionSize(const uint32_t Allocation) {
     return Allocation <= 0x7f ? 4 : 7;
 }
 
+/** @brief Returns the encoded byte length of spilling an XMM register to the stack at @p Offset. */
 static uint8_t VecStoreInstructionSize(const uint32_t VecRegId, const uint32_t Offset) {
     const uint8_t RexBytes = VecRegId >= 8 ? 1 : 0;
     const uint8_t OpcodeBytes = 2;
@@ -272,18 +301,21 @@ static uint8_t VecStoreInstructionSize(const uint32_t VecRegId, const uint32_t O
 }
 #endif
 
+/** @copydoc GetJitRuntime */
 auto GetJitRuntime()-> JitRuntime&
 {
     static JitRuntime JitRuntime{};
     return JitRuntime;
 }
 
+/** @copydoc InitializeCodeHolder */
 void InitializeCodeHolder(CodeHolder& Code, const bool bLogAssembly) {
     Code.set_logger(bLogAssembly ? GetAsmJitLogger() : nullptr);
     Code.set_error_handler(GetAsmJitErrorHandler());
     Code.init(GetJitRuntime().environment(), GetJitRuntime().cpu_features());
 }
 
+/** @brief Bridges AsmJit errors into the configured wide-character logger. */
 class AsmJitErrorHandler : public ErrorHandler
 {
     public: ~AsmJitErrorHandler() noexcept override = default;
@@ -294,6 +326,7 @@ class AsmJitErrorHandler : public ErrorHandler
     }
 };
 
+/** @brief Bridges AsmJit logging into the configured wide-character logger. */
 class AsmJitLogger : public Logger
 {
     public: ~AsmJitLogger() noexcept override = default;
@@ -305,32 +338,39 @@ class AsmJitLogger : public Logger
     }
 };
 
+/** @copydoc GetAsmJitErrorHandler */
 auto GetAsmJitErrorHandler()-> ErrorHandler* {
     static AsmJitErrorHandler JitErrorHandler{};
     return &JitErrorHandler;
 }
 
+/** @copydoc GetAsmJitLogger */
 auto GetAsmJitLogger()-> Logger* {
     static AsmJitLogger JitLogger{};
     return &JitLogger;
 }
 
+/** @copydoc GetLogFunction */
 auto GetLogFunction() -> LogFn {
     return StandardLogger;
 }
 
+/** @copydoc GetErrorLogFunction */
 auto GetErrorLogFunction() -> LogFn {
     return ErrorLogger;
 }
 
+/** @copydoc SetLogFunction */
 auto SetLogFunction(LogFn fn) -> void {
     StandardLogger = std::move(fn);
 }
 
+/** @copydoc SetErrorLogFunction */
 auto SetErrorLogFunction(LogFn fn) -> void {
     ErrorLogger = std::move(fn);
 }
 
+/** @copydoc FThunkDeleter::operator() */
 void FThunkDeleter::operator()(void* Thunk) const noexcept
 {
 #if defined(_WIN64)
@@ -353,6 +393,7 @@ void FThunkDeleter::operator()(void* Thunk) const noexcept
     return (void)GetJitRuntime().release(Thunk);
 }
 
+/** @copydoc FuncArgInfo::FuncArgInfo */
 FuncArgInfo::FuncArgInfo(const FuncSignature& Signature)
 {
     _Detail.init(Signature, GetJitRuntime().environment());
@@ -361,6 +402,7 @@ FuncArgInfo::FuncArgInfo(const FuncSignature& Signature)
     _Signature = Signature;
 }
 
+/** @copydoc FuncArgInfo::GetArguments */
 const std::vector<asmjit::FuncValue>& FuncArgInfo::GetArguments() noexcept {
     if (_ArgVals) return *_ArgVals;
     _ArgVals = std::vector<asmjit::FuncValue>{};
@@ -377,6 +419,7 @@ const std::vector<asmjit::FuncValue>& FuncArgInfo::GetArguments() noexcept {
     return *_ArgVals;
 }
 
+/** @copydoc FuncArgInfo::GetReturnValues */
 const std::vector<asmjit::FuncValue>& FuncArgInfo::GetReturnValues() noexcept {
     if (_RetVals) return *_RetVals;
     _RetVals = std::vector<asmjit::FuncValue>{};
@@ -389,9 +432,12 @@ const std::vector<asmjit::FuncValue>& FuncArgInfo::GetReturnValues() noexcept {
     return *_RetVals;
 }
 
+/** @copydoc FuncArgInfo::GpRegMask */
 asmjit::RegMask FuncArgInfo::GpRegMask() const noexcept { return _GpRegMask; }
+/** @copydoc FuncArgInfo::VecRegMask */
 asmjit::RegMask FuncArgInfo::VecRegMask() const noexcept { return _VecRegMask; }
 
+/** @copydoc FuncArgInfo::GetArgumentIntegralRegisters */
 const std::vector<Gp> & FuncArgInfo::GetArgumentIntegralRegisters() noexcept {
     if (_IntArgRegs) return *_IntArgRegs;
     _IntArgRegs = std::vector<Gp>{};
@@ -401,6 +447,7 @@ const std::vector<Gp> & FuncArgInfo::GetArgumentIntegralRegisters() noexcept {
     return *_IntArgRegs;
 }
 
+/** @copydoc FuncArgInfo::GetArgumentFloatingRegisters */
 const std::vector<Vec> & FuncArgInfo::GetArgumentFloatingRegisters() noexcept {
     if (_VecArgRegs) return *_VecArgRegs;
     _VecArgRegs = std::vector<Vec>{};
@@ -410,9 +457,12 @@ const std::vector<Vec> & FuncArgInfo::GetArgumentFloatingRegisters() noexcept {
     return *_VecArgRegs;
 }
 
+/** @copydoc FuncArgInfo::Signature */
 const asmjit::FuncSignature& FuncArgInfo::Signature() const noexcept { return _Signature; }
+/** @copydoc FuncArgInfo::Detail */
 const asmjit::FuncDetail& FuncArgInfo::Detail() const noexcept { return _Detail; }
 
+/** @brief Returns the platform calling convention object used to interpret AsmJit signatures. */
 inline const asmjit::CallConv& GetCallingConvention() {
     static asmjit::CallConv CallConv = [] {
         asmjit::CallConv Convention{};
@@ -423,6 +473,7 @@ inline const asmjit::CallConv& GetCallingConvention() {
     return CallConv;
 }
 
+/** @copydoc GetPlatformNonVolatileGpRegs */
 const std::vector<Gp>& GetPlatformNonVolatileGpRegs() {
     static std::vector<Gp> Regs = [] {
         const auto& Conv = GetCallingConvention();
@@ -437,6 +488,7 @@ const std::vector<Gp>& GetPlatformNonVolatileGpRegs() {
     return Regs;
 }
 
+/** @copydoc GetPlatformNonVolatileVecRegs */
 const std::vector<Vec>& GetPlatformNonVolatileVecRegs() {
     static std::vector<Vec> Regs = [] {
         const auto& Conv = GetCallingConvention();
@@ -451,10 +503,12 @@ const std::vector<Vec>& GetPlatformNonVolatileVecRegs() {
     return Regs;
 }
 
+/** @copydoc GetPlatformStackSpaceForNonVolatileRegs */
 size_t GetPlatformStackSpaceForNonVolatileRegs() {
     return (GetPlatformNonVolatileGpRegs().size() * 8) + (GetPlatformNonVolatileVecRegs().size() * 16);
 }
 
+/** @copydoc GetPlatformGpScratchReg */
 Gp GetPlatformGpScratchReg() {
     static Gp Reg = [] {
         const auto& Conv = GetCallingConvention();
@@ -468,6 +522,7 @@ Gp GetPlatformGpScratchReg() {
     return Reg;
 }
 
+/** @copydoc GetPlatformXmmScratchReg */
 Vec GetPlatformXmmScratchReg() {
     static Vec Reg = [] {
         const auto& Conv = GetCallingConvention();
@@ -481,6 +536,7 @@ Vec GetPlatformXmmScratchReg() {
     return Reg;
 }
 
+/** @copydoc EmitManualThunkProlog */
 FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThunkFramePlan Plan) {
     using namespace asmjit::x86;
 
@@ -537,6 +593,7 @@ FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThu
 #endif
     }
 
+    // Saved vector registers are spilled after the stack allocation so the unwind metadata can describe a stable layout.
     for (size_t Index = 0; Index < State.Plan.SavedVecRegs.size(); ++Index) {
         const auto Offset = State.Plan.SavedVecOffset + static_cast<uint32_t>(Index * sizeof(Xmm));
         TheAssembler.movdqu(ptr(rsp, static_cast<int32_t>(Offset)), State.Plan.SavedVecRegs[Index]);
@@ -573,6 +630,7 @@ FManualThunkFrameState EmitManualThunkProlog(Assembler& TheAssembler, FManualThu
     return State;
 }
 
+/** @copydoc EmitManualThunkEpilog */
 void EmitManualThunkEpilog(Assembler& TheAssembler, const FManualThunkFrameState& FrameState) {
     using namespace asmjit::x86;
 
@@ -590,6 +648,7 @@ void EmitManualThunkEpilog(Assembler& TheAssembler, const FManualThunkFrameState
     }
 }
 
+/** @copydoc EmitManualThunkWindowsUnwindInfo */
 void EmitManualThunkWindowsUnwindInfo(Assembler& TheAssembler, const FManualThunkFrameState& FrameState, const asmjit::Label UnwindInfoLabel) {
 #if defined(_WIN64)
     if (!FrameState.HasWindowsUnwindInfo()) return;
@@ -604,6 +663,7 @@ void EmitManualThunkWindowsUnwindInfo(Assembler& TheAssembler, const FManualThun
 }
 
 #if defined(_WIN64)
+/** @copydoc BuildWindowsUnwindInfoForFuncFrame */
 std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFrame& Frame) {
     using namespace asmjit;
 
@@ -651,6 +711,7 @@ std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFram
         FrameOffset = static_cast<uint8_t>(FrameOffsetFromSp / 16);
     }
 
+    // Windows unwind codes are recorded in prolog order, which matches the save order AsmJit uses for preserved registers.
     asmjit::Support::BitWordIterator<RegMask> GpIt(SavedGp);
     while (GpIt.has_next()) {
         const auto RegId = GpIt.next();
@@ -722,6 +783,7 @@ std::vector<std::byte> BuildWindowsUnwindInfoForFuncFrame(const asmjit::FuncFram
 }
 #endif
 
+/** @copydoc AddThunkToRuntime(CodeHolder&, const char*) */
 FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage) {
     void* Temp{};
     if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) {
@@ -732,6 +794,7 @@ FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage)
 }
 
 #if defined(_WIN64)
+/** @copydoc AddThunkToRuntime(CodeHolder&, const char*, const FThunkWindowsRuntimeInfo*) */
 FThunkResult AddThunkToRuntime(CodeHolder& Code, const char* JitAddErrorMessage, const FThunkWindowsRuntimeInfo* WindowsRuntimeInfo) {
     void* Temp{};
     if (GetJitRuntime().add(&Temp, &Code) != asmjit::Error::kOk) {

@@ -1,22 +1,33 @@
+/** @file BindingThunk.hpp
+ *  @brief APIs for generating thunks that bind a context pointer to a runtime call target.
+ */
+
 #pragma once
 #include "Common.hpp"
 #include "Context.hpp"
 
 namespace BindingThunk {
 
-// Binds a pointer to a function at runtime.
-// ToFn is the target function. It's first parameter is expected to be the type of BindParam.
-// BindParam is the pointer to bind to ToFn's first parameter. It's lifetime must be the same as or exceed the generated thunk.
-// SourceSignature is, effectively, the signature you want the thunk to be called with. It must have the same return type as ToFn, and all arguments except for the bound argument.
-// Type is the type of thunk to generate. This overload only accepts Default and Register.
-// bLogAssembly, when true, outputs the generated assembly to the logging function set through SetLogFn, or the default std::cout logger.
+/** @brief Generates a binding thunk for a plain callback target.
+ *  @param ToFn Target function whose first parameter receives @p BindParam.
+ *  @param BindParam Pointer bound into the first target argument. It must remain valid for the thunk lifetime.
+ *  @param SourceSignature Signature exposed by the generated thunk. It must match @p ToFn without the bound parameter.
+ *  @param Type Binding mode. This overload accepts @ref EBindingThunkType::Default and @ref EBindingThunkType::Register.
+ *  @param bLogAssembly When true, emits generated assembly through the configured logger.
+ *  @return Owning thunk pointer on success, or a detailed error on failure.
+ */
 THUNK_API FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Default, bool bLogAssembly = false);
 
-// Binds a pointer to a function at runtime.
-// ToFn is the target function. It's first parameter is expected to be the type of BindParam.
-// BindParam is the pointer to bind to ToFn's first parameter. It's lifetime must be the same as or exceed the generated thunk.
-// Type is the type of thunk to generate. This overload only accepts Default and Register.
-// bLogAssembly, when true, outputs the generated assembly to the logging function set through SetLogFn, or the default std::cout logger.
+/** @brief Typed wrapper for @ref GenerateBindingThunk(void*, void*, FuncSignature, EBindingThunkType, bool).
+ *  @tparam BindParamType Type of the bound context pointer.
+ *  @tparam InReturnType Return type exposed by the generated thunk and target callback.
+ *  @tparam InArgs Unbound argument types exposed by the generated thunk.
+ *  @param ToFn Target function whose first parameter receives @p BindParam.
+ *  @param BindParam Pointer bound into the first target argument.
+ *  @param BindingType Binding mode. This overload accepts @ref EBindingThunkType::Default and @ref EBindingThunkType::Register.
+ *  @param bLogAssembly When true, emits generated assembly through the configured logger.
+ *  @return Owning thunk pointer on success, or a detailed error on failure.
+ */
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 THUNK_API FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const EBindingThunkType BindingType = EBindingThunkType::Default, const bool bLogAssembly = false) {
     return GenerateBindingThunk(reinterpret_cast<void*>(ToFn),
@@ -26,19 +37,26 @@ THUNK_API FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, 
         bLogAssembly);
 }
 
-// Binds a pointer to a function at runtime and all other arguments to an ArgumentContext. The 0th argument in an ArgumentContext is the first unbound argument.
-// ToFn is the target function. It must match the signature exactly.
-// BindParam is the pointer to bind to ToFn's first parameter. It's lifetime must be the same as or exceed the generated thunk.
-// SourceSignature is, effectively, the signature you want the thunk to be called with. Minimally, it must have a void return type set.
-// Type is the type of thunk to generate. This overload only accepts Argument and ArgumentAndRegister. todo enforce through templates
-// bLogAssembly, when true, outputs the generated assembly to the logging function set through SetLogFn, or the default std::cout logger.
+/** @brief Generates a binding thunk that forwards unbound arguments through @ref ArgumentContext.
+ *  @param ToFn Target callback that receives the bound parameter and an argument context.
+ *  @param BindParam Pointer bound into the first target argument. It must remain valid for the thunk lifetime.
+ *  @param SourceSignature Signature exposed by the generated thunk.
+ *  @param Type Binding mode. This overload accepts @ref EBindingThunkType::Argument and @ref EBindingThunkType::ArgumentAndRegister.
+ *  @param bLogAssembly When true, emits generated assembly through the configured logger.
+ *  @return Owning thunk pointer on success, or a detailed error on failure.
+ */
 THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, FuncSignature SourceSignature, EBindingThunkType Type = EBindingThunkType::Argument, bool bLogAssembly = false);
 
-// Binds a pointer to a function at runtime and all other arguments to an ArgumentContext. The 0th argument in an ArgumentContext is the first unbound argument.
-// ToFn is the target function. It must match the signature exactly.
-// BindParam is the pointer to bind to ToFn's first parameter. It's lifetime must be the same as or exceed the generated thunk.
-// Type is the type of thunk to generate. This overload only accepts Argument and ArgumentAndRegister. todo enforce through templates
-// bLogAssembly, when true, outputs the generated assembly to the logging function set through SetLogFn, or the default std::cout logger.
+/** @brief Typed wrapper for @ref GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, FuncSignature, EBindingThunkType, bool).
+ *  @tparam BindParamType Type of the bound context pointer.
+ *  @tparam InReturnType Return type represented by the generated thunk signature.
+ *  @tparam InArgs Unbound argument types packed into the generated @ref ArgumentContext.
+ *  @param ToFn Target callback that receives the bound parameter and an argument context.
+ *  @param BindParam Pointer bound into the first target argument.
+ *  @param Type Binding mode. This overload accepts @ref EBindingThunkType::Argument and @ref EBindingThunkType::ArgumentAndRegister.
+ *  @param bLogAssembly When true, emits generated assembly through the configured logger.
+ *  @return Owning thunk pointer on success, or a detailed error on failure.
+ */
 template<typename BindParamType, typename InReturnType, typename... InArgs>
 THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Argument, const bool bLogAssembly = false) {
     return GenerateBindingThunk(reinterpret_cast<void(*)(void*, ArgumentContext &)>(ToFn), BindParam, FuncSignature::build<AsmJitCompatRetV<InReturnType>, AsmJitCompatArgV<InArgs>...>(), Type, bLogAssembly);

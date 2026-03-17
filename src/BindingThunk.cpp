@@ -1,18 +1,30 @@
+/** @file BindingThunk.cpp
+ *  @brief Implements binding thunk generation for default, register, and argument-based modes.
+ */
+
 #include "BindingThunk.hpp"
 #include "Context.hpp"
 #include <vector>
 
 namespace BindingThunk {
 
+/** @brief Returns the byte offset of a packed argument inside an @ref ArgumentContext. */
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgsOffset + (ArgumentContext::ArgumentSize * Index));
 }
 
+/** @brief Emits a 64-bit immediate store through a scratch register.
+ *  @param TheAssembler Assembler receiving the instructions.
+ *  @param Destination Memory destination to write.
+ *  @param Value Immediate value to store.
+ *  @param GpScratchReg Scratch register used to materialize the immediate.
+ */
 static void StoreImmediateU64(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& Destination, const uint64_t Value, const asmjit::x86::Gp& GpScratchReg) {
     TheAssembler.mov(GpScratchReg, Value);
     TheAssembler.mov(Destination, GpScratchReg);
 }
 
+/** @brief Captures the current register file into a @ref RegisterContext buffer. */
 static void SaveRegisterContext(asmjit::x86::Assembler& TheAssembler, const asmjit::x86::Mem& ContextPtr, const asmjit::x86::Gp& GpScratchReg) {
     for (const auto& [Register, Offset] : RegisterContextOffsets) {
         if (Register.is_gp()) {
@@ -32,6 +44,7 @@ THUNK_API FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgI
 static FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 THUNK_API FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 
+/** @copydoc GenerateBindingThunk(void*, void*, FuncSignature, EBindingThunkType, bool) */
 FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     auto InvokeSignature = ShiftSignature(SourceSignature);
     FuncArgInfo SrcSig{SourceSignature};
@@ -53,6 +66,7 @@ FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature Sou
     }
 }
 
+/** @brief Emits a minimal thunk that only shifts register arguments and jumps to the destination. */
 THUNK_API FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     if (Src.Signature().arg_count() >= Dest.Signature().arg_count()) {
         return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidSignature, "GenerateSimpleShift source arg count is >= destination arg count."));
@@ -82,6 +96,7 @@ THUNK_API FThunkResult GenerateSimpleShift(void* ToFn, void* BindParam, FuncArgI
     return AddThunkToRuntime(Code, "Failed to add simple binding thunk to the JIT runtime.");
 }
 
+/** @brief Emits a compiler-assisted thunk for signatures that require stack remapping or complex return handling. */
 FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     asmjit::CodeHolder Code{};
     InitializeCodeHolder(Code, bLogAssembly);
@@ -167,6 +182,7 @@ FThunkResult GenerateComplexShift(void *ToFn, void* BindParam, FuncArgInfo& Src,
 #endif
 }
 
+/** @brief Emits a binding thunk that captures a register snapshot for a later restore thunk. */
 THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
@@ -191,10 +207,10 @@ THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindPa
     auto GpScratchReg = GetPlatformGpScratchReg();
     auto XmmScratchReg = GetPlatformXmmScratchReg();
     /*
-     * Roughly:
+     * Stack layout after the manual prolog:
      * struct Locals {
-     *      ShadowArgSpace              // offset 0
-     *      RegisterCtxSpace            // offset sizeof ShadowArgSpace
+     *      ShadowArgSpace              // scratch/shadow area for outgoing calls and stack args
+     *      RegisterCtxSpace            // serialized RegisterContext used by the restore thunk
      * }
      */
     const auto ContextPtr = ptr(rsp, static_cast<int32_t>(ShadowArgSpace));
@@ -205,6 +221,7 @@ THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindPa
     TheAssembler.lea(gpq(FuncArgInfo{FuncSignature::build<void, RegisterContext*>()}.Detail().arg(0).reg_id()), ContextPtr);
     TheAssembler.call(&RegisterContextStack::Push);
 
+    // Walk backwards so stack-to-stack moves do not overwrite source values we still need to read.
     for (int SrcArgIndex = static_cast<int>(Src.GetArguments().size()) - 1; SrcArgIndex >= 0; --SrcArgIndex) {
         auto& SrcArg = Src.GetArguments()[SrcArgIndex];
         auto& DestArg = Dest.GetArguments()[SrcArgIndex + 1];
@@ -284,6 +301,7 @@ THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindPa
 #endif
 }
 
+/** @copydoc GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, FuncSignature, EBindingThunkType, bool) */
 FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
@@ -318,7 +336,7 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
     const auto RegContextPtr = ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size()));
     const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
-    // start by saving registers at the tail end of the data part of ArgumentContext, if needed
+    // In ArgumentAndRegister mode the register capture lives immediately after the packed argument array.
     if (Type == EBindingThunkType::ArgumentAndRegister) {
         SaveRegisterContext(TheAssembler, RegContextPtr, GpScratchReg);
     }
@@ -327,7 +345,7 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
     StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::ReturnValueOffset), 0, GpScratchReg);
     StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::ArgsCountOffset), SrcInfo.GetArguments().size(), GpScratchReg);
 
-    // push arguments into structure
+    // Marshal every unbound argument into a fixed-width slot so the callback can inspect it uniformly.
     for (auto Index = 0; auto& FuncValue : SrcInfo.GetArguments()) {
         const auto ArgumentOffset = GetArgumentContextOffset(Index++);
         if (FuncValue.is_reg()) {
@@ -356,7 +374,7 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
         }
     }
 
-    // set flags if needed
+    // The callback uses these flags to decide whether it may read a return slot or appended register data.
     auto Flag = (SrcInfo.GetReturnValues().empty() ? 0 : ArgumentContext::HasReturnValueFlag) |
         (Type == EBindingThunkType::ArgumentAndRegister ? ArgumentContext::HasRegisterContextFlag : 0);
     StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), Flag, GpScratchReg);
@@ -366,7 +384,7 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
     TheAssembler.lea(gpq(DestInfo.Detail().arg(1).reg_id()), ArgContextPtr);
     TheAssembler.call(ToFn);
 
-    // if there's a return value, make sure it's in the right register. we don't support return types that take multiple registers or other weirdness
+    // The callback writes the raw return value back into the context, so reload it into the ABI return register here.
     if (Flag & 1) {
         auto& Val = SrcInfo.GetReturnValues()[0];
         if (TypeUtils::is_int(Val.type_id())) {
@@ -396,9 +414,10 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
 #endif
 }
 
+/** @brief Returns the invocation signature for a plain binding thunk after inserting the bound parameter. */
 THUNK_API FuncSignature ShiftSignature(const FuncSignature& InSignature) {
     auto InvokeSig = InSignature;
-    InvokeSig.add_arg(asmjit::TypeId::kUInt64); // doesn't matter what type we add, it'll get overwritten
+    InvokeSig.add_arg(asmjit::TypeId::kUInt64); // Placeholder slot; it will be overwritten with the bound-parameter type category.
     for (int ArgIndex = static_cast<int>(InvokeSig.arg_count()) - 2; ArgIndex >= 0; ArgIndex--)
     {
         InvokeSig.set_arg(ArgIndex + 1, InvokeSig.args()[ArgIndex]);

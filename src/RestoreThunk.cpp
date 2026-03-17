@@ -1,15 +1,23 @@
+/** @file RestoreThunk.cpp
+ *  @brief Implements restore thunks that rebuild call state from argument or register captures.
+ */
+
 #include "RestoreThunk.hpp"
 #include "Context.hpp"
 
 namespace BindingThunk {
 
+/** @brief Emits a restore thunk that rebuilds arguments from the thread-local register stack. */
 static FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, bool bLogAssembly);
+/** @brief Emits a restore thunk that rebuilds arguments from an @ref ArgumentContext. */
 static FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, bool bLogAssembly);
 
+/** @brief Returns the byte offset of a packed argument within the variable part of an @ref ArgumentContext. */
 static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgumentSize * Index);
 }
 
+/** @copydoc GenerateRestoreThunk(void*, FuncSignature, EBindingThunkType, bool) */
 FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
     switch (BindingType) {
         case EBindingThunkType::Default:
@@ -25,6 +33,7 @@ FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindin
     }
 }
 
+/** @brief Emits a restore thunk for @ref EBindingThunkType::Register. */
 FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature Signature, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
@@ -41,8 +50,8 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     auto SavedNonVolatileGpRegs = GetPlatformNonVolatileGpRegs();
     auto SavedNonVolatileVecRegs = GetPlatformNonVolatileVecRegs();
 
-    // allocate locals with shadow space for calls (call to 'CallTo' will always take the most space so we use ArgInfo.Detail().arg_stack_size())
-    // we'll need space for all nonvolatile registers and argument registers in addition to the shadow/arg space + alignment.
+    // The frame needs outgoing shadow/stack argument space plus local spill slots for preserved state
+    // while the original register context is reconstructed into the live machine state.
     const auto ShadowArgSpace = ArgInfo.Detail().arg_stack_size();
     const auto NVFltRegSpace = static_cast<uint32_t>(SavedNonVolatileVecRegs.size() * sizeof(Xmm));
     const auto IntArgSpace = ArgInfo.GetArgumentIntegralRegisters().size() * 8;
@@ -61,12 +70,12 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     });
     auto GpScratchReg = GetPlatformGpScratchReg();
     /*
-     * Roughly:
+     * Stack layout after the manual prolog:
      * struct Locals {
-     *      ShadowArgSpace            // offset 0
-     *      IntArgSpace               // offset sizeof ShadowArgSpace
-     *      FltArgSpace               // offset sizeof ShadowArgSpace + sizeof IntArgSpace
-     *      NVFltRegSpace             // offset sizeof ShadowArgSpace + sizeof IntArgSpace + sizeof FltArgSpace
+     *      ShadowArgSpace            // outgoing call shadow/stack argument space
+     *      IntArgSpace               // scratch slots for live GP argument registers
+     *      FltArgSpace               // scratch slots for live XMM argument registers
+     *      NVFltRegSpace             // saved non-volatile XMM registers from the manual frame
      * }
      */
     const auto IntArgPtr = ptr(rsp, static_cast<int32_t>(ShadowArgSpace)); // treat as an array of uint64_t
@@ -74,7 +83,7 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
 
-    // we need to call RegisterContextStack::Top, so we need to save the registers with arguments first
+    // RegisterContextStack::Top is an ordinary call, so preserve the live argument registers before invoking it.
     {
         int IntIndex = 0, FloatIndex = 0;
         for (auto& Arg: ArgInfo.GetArgumentIntegralRegisters()) {
@@ -87,8 +96,7 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
 
     TheAssembler.call(&RegisterContextStack::Top); // shadow space already allocated
 
-    // restore context, except for arg registers
-    // move arguments on the stack to new stack slot for the call (already allocated)
+    // Stack arguments can be copied directly into the outgoing call area because it is already allocated.
     for (auto& Arg: ArgInfo.GetArguments()) {
         if (Arg.is_stack()) {
             TheAssembler.mov(GpScratchReg, RspInitial.clone_adjusted(Arg.stack_offset()));
@@ -101,7 +109,7 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     TheAssembler.push(GpScratchReg);
     TheAssembler.popfq();
 
-    // restore all saved registers that aren't args
+    // Restore every captured register except active argument registers, which are rebuilt from dedicated scratch slots.
     const auto GpMask = ArgInfo.GpRegMask();
     const auto VecMask = ArgInfo.VecRegMask();
     for (auto& [Register, Offset] : RegisterContextOffsets) {
@@ -118,7 +126,7 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
     }
     TheAssembler.mov(rax, ptr(rax, RegisterContextOffsets[rax]));
 
-    // restore arg registers
+    // Rehydrate the argument registers last so earlier context restoration does not clobber them.
     {
         int IntIndex = 0, FloatIndex = 0;
         for (auto& Arg: ArgInfo.GetArgumentIntegralRegisters()) {
@@ -129,10 +137,9 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
         }
     }
 
-    // now args are setup and context is restored, make the call
+    // The destination now sees the same live argument and non-argument register state that the binding thunk captured.
     TheAssembler.call(CallTo);
 
-    // now we're done, deallocate and return
     EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();
 #if defined(_WIN64)
@@ -149,6 +156,7 @@ FThunkResult GenerateRestoreThunkForRegisterContext(void* CallTo, FuncSignature 
 #endif
 }
 
+/** @brief Emits a restore thunk for @ref EBindingThunkType::Argument and @ref EBindingThunkType::ArgumentAndRegister. */
 FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
@@ -188,9 +196,11 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
     const auto SavedContextPtr = ptr(rsp, static_cast<int32_t>(SavedContextPtrOffset));
     int32_t DeferredContextArgOffset = -1;
 
+    // The context pointer lives in a volatile argument register, so preserve it before reconstructing the call.
     TheAssembler.mov(SavedContextPtr, ContextReg);
 
-    // move arguments from context to call position, excluding ContextReg
+    // Rebuild the destination call frame from the packed context. If the destination also wants ContextReg,
+    // defer that load until every other context read is complete.
     for (auto Index = 0; auto& FuncValue : DestInfo.GetArguments()) {
         const auto ArgumentOffset = GetArgumentContextOffset(Index++);
         if (FuncValue.is_reg()) {
@@ -230,7 +240,7 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
         TheAssembler.push(GpScratchReg);
         TheAssembler.popfq();
 
-        // restore all saved registers that aren't args
+        // Restore the captured non-argument register state after the argument array has been consumed.
         const auto GpMask = DestInfo.GpRegMask();
         const auto VecMask = DestInfo.VecRegMask();
         for (auto& [Register, Offset] : RegisterContextOffsets) {
@@ -251,9 +261,9 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
         TheAssembler.mov(ContextReg, ArgContextPtr.clone_adjusted(DeferredContextArgOffset));
     }
 
-    // make the call
     TheAssembler.call(CallTo);
 
+    // Argument-mode restore thunks report results through the context instead of their own signature.
     if (!DestInfo.GetReturnValues().empty()) {
         auto& Val = DestInfo.GetReturnValues()[0];
         TheAssembler.mov(GpScratchReg, SavedContextPtr);
