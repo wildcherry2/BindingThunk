@@ -2,6 +2,8 @@
  *  @brief APIs for generating thunks that bind a context pointer to a runtime call target.
  */
 
+// todo cleanup overloads so that there won't be errors if the wrong overload/Type combination is provided
+
 #pragma once
 #include "Common.hpp"
 #include "Context.hpp"

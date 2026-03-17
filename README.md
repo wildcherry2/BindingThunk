@@ -1,8 +1,8 @@
 # BindingThunk
-Utility that allows you to generate bound functions at runtime without functors, with additional options for packing unbound arguments into a structure and saving/restoring register state.
+C++23 utility that allows you to generate bound functions at runtime without functors, with additional options for packing unbound arguments into a structure and saving/restoring register state.
 
 ## What does this library solve?
-`std::function` and `std::bind` both offer an approach to binding arguments to a function through a functor. Those are useful if you're dealing with a use case that accepts `std::function` types, but if you're in a situation where you need a plain function pointer, you're out of luck.
+Lambdas, `std::function`, and `std::bind` offer an approach to binding arguments to a function through a functor. Those are useful if you're dealing with a use case that accepts `std::function` types, but if you're in a situation where you need a plain function pointer, you're out of luck.
 * You cannot directly cast an `std::function` or the result of an `std::bind` expression to a function pointer.
 * `std::function` exposes the `std::function::target` function, but to get a meaningful pointer you must provide the correct pointer type as a template argument, and even if you get a valid target, you can't just call it without the bound `std::function` if it captures any state. As a functor, the call operator is a member function, so it would be like calling a member function without the object's `this` pointer.
 * Similarly, bound lambdas are also treated as functors with similar semantics to std::function with respect to casting and attempting to call the cast result. By the standard, attempting to get call `std::function::target` on a bound lambda will always produce `nullptr`, and attempting to cast the bound lambda to a raw function pointer will always be undefined behavior at best, and a compiler error at worst.
@@ -11,7 +11,7 @@ Utility that allows you to generate bound functions at runtime without functors,
 This is consistent with C++'s design; no code is generated at runtime, but in order to know the address of the bound data, it would have to be generated at runtime. That's what BindingThunk is for.
 
 ## General Use Cases
-Generally, a thunk can be generated to bind a single pointer to the first argument position. This can theoretically be a pointer to anything, though the most useful option is to bind a `this` pointer to a member function, effectively making a free-function version of a member function that can be passed anywhere.<br><br>
+Generally, a thunk can be generated to bind a single pointer to the first argument position. This can theoretically be a pointer to anything, though the most useful option is to bind a `this` pointer to a member function, effectively making a free-function version of a member function that can be passed anywhere. Note that most examples are simpler free-function bindings.<br><br>
 Thunks can also be generated that both bind a pointer, pack unbound arguments a structure, call the target function with the structure and bound argument, and return the return value that's set in the structure. These `ArgumentContext`-based thunks can be used to 'normalize' the arguments of various functions and redirect function calls to a single function type.<br><br>
 For any generated thunk, the bound argument must outlive the thunk for safe use. A generated thunk is returned as a `std::unique_ptr` with a specialized deleter that cleans it up. Calling a generated thunk requires calling `get` on the returned `std::unique_ptr` and casting it to the correct function pointer type. If you're wondering why we don't carry over template parameters that cut out the need to cast, it's primarily to make the pointer easier to pass around in different environments.
 
@@ -32,6 +32,21 @@ ctest --preset debug-static-tests
 ```
 
 Other available presets include `debug-static-example`, `debug-shared`, `debug-shared-tests`, `debug-shared-example`, `release-static`, and `release-shared`.
+
+## Thunk Types and Usage
+The library adds two primary functions, `GenerateBindingThunk` and `GenerateRestoreThunk`. Each function has various overloads for different kinds of thunk generation and template-based syntactic sugar. There are 4 different kinds of thunks that can be generated through `GenerateBindingThunk`, and some of those types can be paired with a thunk from `GenerateRestoreThunk` for special forwarding. Currently, you choose which type of thunk to generate through overload choice and an `EBindingThunkType` value. Note that there's nothing stopping you from taking the address of a stack-allocated variable and binding it, just make sure it outlives the generated thunk.
+### `EBindingThunk::Default`: Binds the provided pointer argument to the provided function.
+Suppose you have a function `void Fn(int* BindArg, double ArgTwo, bool ArgThree)`.<br><br>To bind a pointer declared as `int* Arg = new int(10)`, you'd call `auto Thunk = GenerateBindingThunk<int*, void, double, bool>(Fn, Arg, EBindingThunkType::Default)`.<br><br>To invoke the bound `Thunk`, you would do `reinterpret_cast<void(*)(double, bool)>(Thunk.get())(1.25, true)`, which will call `Fn` as if with `Fn(Arg, 1.25, true)`. Also note that in most cases the template parameters for this overload of `GenerateBindingThunk` are optional; they are just included for illustration.
+### `EBindingThunk::Argument`: Binds the provided pointer argument to a provided function that takes the remaining arguments in an `ArgumentContext` reference.
+In many ways, this is similar to a C-style varargs function, but it allows structured, random access with a return value that's set within the structure rather than returned by the `return` keyword, though the thunk itself must be generated with a known argument list.<br><br>
+Suppose you have a function `void Fn(int* BindArg, ArgumentContext& Context)`, and you want to make a thunk that's callable as `int(*)(double FloatingArg, bool BoolArg, int IntArg)` and invokes `Fn` to run it. Note that this also means that `Fn` must set a return value, otherwise it's the bitwise-equivalent of a default-constructed `uint64_t`, which in this case is `0`, but that may not be valid for other return types.<br><br>
+To bind a function with the same `Arg` pointer given in the `EBindingThunk::Default` example, you'd call `auto Thunk = GenerateBindingThunk<int*, int, double, bool, int>(Fn, Arg, EBindingThunkType::Argument)`. For this overload, the template parameters are required since we can't infer what you want the thunk to be called with based on the signature of `Fn`.<br><br>
+To invoke the bound `Thunk`, you would do `int Result = reinterpret_cast<int(*)(double, bool, int)>(Thunk.get())(1.25, true, 42)`.<br><br>
+This type of thunk also has a corresponding optional _restore_ thunk that can be generated with the same signature. Restore thunks generally restore the arguments and registers to their original values, then call a function with the same signature. This is used in more advanced scenarios.
+### `EBindingThunk::Register`: Binds the provided pointer argument to the provided function, and saves all non-argument registers to a thread-local stack.
+From a C++ point-of-view, this is identical to `EBindingThunk::Default`. From an ABI point-of-view, this can be paired with a restore thunk, which, in this case, restores all non-argument registers from the thread-local stack. This is also used in more advanced scenarios for ABI stability, or for reading raw register values at the point where the thunk was called (but this probably shouldn't be used as part of a midhook).
+### `EBindingThunk::ArgumentAndRegister`: Binds the provided pointer argument to a provided function that takes the remaining arguments in an `ArgumentContext` reference and saves all non-argument registers to a thread-local stack.
+Similar story to the plain `EBindingThunk::Register`; for C++, it's identical to `EBindingThunk::Argument`, but can be paired with a restore thunk for advanced scenarios for ABI stability or reading raw register values (this also probably shouldn't be used as part of a midhook).
 
 ## Platform-Specific and General Quirks
 ### General:
