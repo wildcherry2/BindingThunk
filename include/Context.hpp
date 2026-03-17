@@ -120,6 +120,19 @@ public:
     [[nodiscard]] bool HasRegisterContext() const noexcept { return _Flags & HasRegisterContextFlag; }
     /** @brief Returns the number of packed arguments stored in the context. */
     [[nodiscard]] uint64_t GetArgumentsCount() const noexcept { return _ArgsCount; }
+    /** @brief Reads the stored return value as type @p T.
+     *  @tparam T Return type to reconstruct from the raw 64-bit return slot. Defaults to @c uint64_t.
+     *  @details Reference return types are not supported directly. Use a pointer-like type and
+     *  dereference it explicitly if the original function returned an address. This accessor only
+     *  supports source-language types that the platform ABI returns directly by value.
+     *  @return The return value reconstructed from the packed slot.
+     */
+    template<typename T = uint64_t>
+    [[nodiscard]] T GetReturnValue() const noexcept {
+        static_assert(!std::is_reference_v<T>, "ArgumentContext::GetReturnValue does not support reference types directly. Use a pointer-like type and dereference it explicitly.");
+        static_assert(Detail::ReturnedByValue<T>, "ArgumentContext::GetReturnValue only supports source-language types that are returned directly by value. Use a pointer-like type for indirect return forms.");
+        return ReadPackedValue<T>(_ReturnValue);
+    }
     /** @brief Stores a raw 64-bit return value into the context. */
     void SetReturnValue(const uint64_t Value) noexcept { _ReturnValue = Value; }
 

@@ -57,6 +57,17 @@ static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue5>>);
 static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue6>>);
 static_assert(std::is_reference_v<AsmJitCompatArgV<FByteValue7>>);
 static_assert(!std::is_reference_v<AsmJitCompatArgV<FByteValue8>>);
+static_assert(Detail::ReturnedByValue<uint8_t>);
+static_assert(Detail::ReturnedByValue<uint16_t>);
+static_assert(Detail::ReturnedByValue<uint32_t>);
+static_assert(Detail::ReturnedByValue<uint64_t>);
+static_assert(Detail::ReturnedByValue<float>);
+static_assert(Detail::ReturnedByValue<double>);
+static_assert(Detail::ReturnedByValue<int*>);
+static_assert(!Detail::ReturnedByValue<FByteValue3>);
+static_assert(!Detail::ReturnedByValue<FByteValue5>);
+static_assert(!Detail::ReturnedByValue<FByteValue6>);
+static_assert(!Detail::ReturnedByValue<FByteValue7>);
 
 static void ThrowingRegisterContextStackFatalHandler(const char* Message) {
     GRegisterContextStackFatalMessage = Message;
@@ -623,21 +634,41 @@ TEST(ContextTests, SetReturnValueSupportsRawAndTypedWrites) {
     auto Storage = MakeArgumentContextStorage(0);
     auto& Context = GetArgumentContext(Storage);
     int Value = 13;
+    const uint8_t ByteValue = 0xa1;
+    const uint16_t ShortValue = 0xb1b2;
     const int32_t NarrowValue = -37;
+    const uint32_t WordValue = 0xc1c2c3c4u;
     const float FloatValue = 4.75f;
+    const double DoubleValue = 8.5;
+    const uint64_t WideValue = 0xd1d2d3d4d5d6d7d8ULL;
     const FByteValue3 OddSizedValue { { std::byte { 0xaa }, std::byte { 0xbb }, std::byte { 0xcc } } };
 
     Context.SetReturnValue(0xfeedfacecafebeefULL);
-    EXPECT_EQ(ReadArgumentContextField<uint64_t>(Context, ArgumentContext::ReturnValueOffset), 0xfeedfacecafebeefULL);
+    EXPECT_EQ(Context.GetReturnValue(), 0xfeedfacecafebeefULL);
 
     Context.SetReturnValue(&Value);
-    EXPECT_EQ(ReadArgumentContextField<int*>(Context, ArgumentContext::ReturnValueOffset), &Value);
+    EXPECT_EQ(Context.GetReturnValue<int*>(), &Value);
+
+    Context.SetReturnValue(ByteValue);
+    EXPECT_EQ(Context.GetReturnValue<uint8_t>(), ByteValue);
+
+    Context.SetReturnValue(ShortValue);
+    EXPECT_EQ(Context.GetReturnValue<uint16_t>(), ShortValue);
 
     Context.SetReturnValue(NarrowValue);
-    EXPECT_EQ(ReadArgumentContextField<int32_t>(Context, ArgumentContext::ReturnValueOffset), NarrowValue);
+    EXPECT_EQ(Context.GetReturnValue<int32_t>(), NarrowValue);
+
+    Context.SetReturnValue(WordValue);
+    EXPECT_EQ(Context.GetReturnValue<uint32_t>(), WordValue);
 
     Context.SetReturnValue(FloatValue);
-    EXPECT_FLOAT_EQ(ReadArgumentContextField<float>(Context, ArgumentContext::ReturnValueOffset), FloatValue);
+    EXPECT_FLOAT_EQ(Context.GetReturnValue<float>(), FloatValue);
+
+    Context.SetReturnValue(DoubleValue);
+    EXPECT_DOUBLE_EQ(Context.GetReturnValue<double>(), DoubleValue);
+
+    Context.SetReturnValue(WideValue);
+    EXPECT_EQ(Context.GetReturnValue<uint64_t>(), WideValue);
 
     Context.SetReturnValue(OddSizedValue);
     EXPECT_EQ(ReadArgumentContextField<FByteValue3>(Context, ArgumentContext::ReturnValueOffset), OddSizedValue);
@@ -1044,7 +1075,7 @@ TEST(BindingThunkTests, ArgumentRestoreThunkWritesIntegerReturnValueIntoContext)
     EXPECT_EQ(Binder.originalCalls, 1);
     EXPECT_EQ(ReferenceValue, 9);
     EXPECT_EQ(PointedValue, 13);
-    EXPECT_EQ(ReadArgumentContextField<int64_t>(Context, ArgumentContext::ReturnValueOffset), 25);
+    EXPECT_EQ(Context.GetReturnValue<int64_t>(), 25);
 
     GArgumentSmallBinder = nullptr;
 }
@@ -1097,7 +1128,7 @@ TEST(BindingThunkTests, ArgumentRestoreThunkWritesFloatReturnValueIntoContext) {
     RestoreFn(Context);
 
     EXPECT_EQ(Binder.originalCalls, 1);
-    EXPECT_FLOAT_EQ(ReadArgumentContextField<float>(Context, ArgumentContext::ReturnValueOffset), 15.5f);
+    EXPECT_FLOAT_EQ(Context.GetReturnValue<float>(), 15.5f);
 
     GArgumentFloatStackBinder = nullptr;
 }
