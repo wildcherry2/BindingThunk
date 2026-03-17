@@ -77,6 +77,7 @@ struct THUNK_API FThunkError {
 
 using FThunkResult = std::expected<FThunkPtr, FThunkError>;
 
+// Helper struct to get argument and return value information in a platform-independent manner.
 class THUNK_API FuncArgInfo
 {
 public:
@@ -112,8 +113,8 @@ private:
 THUNK_API const std::vector<Gp>&  GetPlatformNonVolatileGpRegs();
 THUNK_API const std::vector<Vec>& GetPlatformNonVolatileVecRegs();
 THUNK_API size_t GetPlatformStackSpaceForNonVolatileRegs();
-THUNK_API Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
-THUNK_API Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument on the current platform
+THUNK_API Gp GetPlatformGpScratchReg(); // gets a volatile register that isn't used as an argument or return value on the current platform
+THUNK_API Vec GetPlatformXmmScratchReg(); // gets a volatile register that isn't used as an argument or return value on the current platform
 
 // borrowed from SafetyHook
 union THUNK_API Xmm {

@@ -43,8 +43,11 @@ static ArgumentContext& GetArgumentContext(std::unique_ptr<std::byte[]>& Storage
 
 template<typename T>
 static T ReadArgumentContextField(const ArgumentContext& Context, const uint64_t Offset) {
+    static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!");
     auto Raw = *reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(&Context) + Offset);
-    return std::bit_cast<T>(Raw);
+    T Value {};
+    std::memcpy(&Value, &Raw, sizeof(T));
+    return Value;
 }
 
 template<typename T>
@@ -904,6 +907,33 @@ TEST(BindingThunkTests, ArgumentBindingRestoresSmallMixedSignature) {
     GArgumentSmallBinder = nullptr;
 }
 
+TEST(BindingThunkTests, ArgumentRestoreThunkWritesIntegerReturnValueIntoContext) {
+    ArgumentSmallBinder Binder{};
+    GArgumentSmallBinder = &Binder;
+    int ReferenceValue = 5;
+    int PointedValue = 7;
+
+    auto Storage = MakeArgumentContextStorage(3);
+    auto& Context = GetArgumentContext(Storage);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, static_cast<uint64_t>(3));
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + ArgumentContext::ArgumentSize, &ReferenceValue);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (2 * ArgumentContext::ArgumentSize), &PointedValue);
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentSmall, EBindingThunkType::Argument);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    auto RestoreThunk = std::move(RestoreThunkResult.value());
+
+    auto RestoreFn = ThunkCast<void(*)(ArgumentContext&)>(RestoreThunk);
+    RestoreFn(Context);
+
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_EQ(ReferenceValue, 9);
+    EXPECT_EQ(PointedValue, 13);
+    EXPECT_EQ(ReadArgumentContextField<int64_t>(Context, ArgumentContext::ReturnValueOffset), 25);
+
+    GArgumentSmallBinder = nullptr;
+}
+
 TEST(BindingThunkTests, ArgumentBindingRestoresStackFloatArgumentAndFloatReturn) {
     ArgumentFloatStackBinder Binder{};
     GArgumentFloatStackBinder = &Binder;
@@ -929,6 +959,31 @@ TEST(BindingThunkTests, ArgumentBindingRestoresStackFloatArgumentAndFloatReturn)
     EXPECT_FLOAT_EQ(Binder.e, 5.5f);
 
     GRestoreThunk.reset();
+    GArgumentFloatStackBinder = nullptr;
+}
+
+TEST(BindingThunkTests, ArgumentRestoreThunkWritesFloatReturnValueIntoContext) {
+    ArgumentFloatStackBinder Binder{};
+    GArgumentFloatStackBinder = &Binder;
+
+    auto Storage = MakeArgumentContextStorage(5);
+    auto& Context = GetArgumentContext(Storage);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, static_cast<uint64_t>(1));
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + ArgumentContext::ArgumentSize, static_cast<uint64_t>(2));
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (2 * ArgumentContext::ArgumentSize), static_cast<uint64_t>(3));
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (3 * ArgumentContext::ArgumentSize), static_cast<uint64_t>(4));
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + (4 * ArgumentContext::ArgumentSize), 5.5f);
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentFloatStack, EBindingThunkType::Argument);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    auto RestoreThunk = std::move(RestoreThunkResult.value());
+
+    auto RestoreFn = ThunkCast<void(*)(ArgumentContext&)>(RestoreThunk);
+    RestoreFn(Context);
+
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_FLOAT_EQ(ReadArgumentContextField<float>(Context, ArgumentContext::ReturnValueOffset), 15.5f);
+
     GArgumentFloatStackBinder = nullptr;
 }
 

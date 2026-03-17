@@ -166,15 +166,17 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
     auto DestInfo = FuncArgInfo{DestinationSignature};
 
     const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
+    constexpr uint32_t SavedContextPtrSize = sizeof(uint64_t);
+    const auto SavedContextPtrOffset = static_cast<uint32_t>(ShadowArgSpace);
     const auto NonVolatileVecStackSpace = bSafe ? GetPlatformNonVolatileVecRegs().size() * sizeof(Xmm) : 0;
-    const auto SavedVecOffset = static_cast<uint32_t>((ShadowArgSpace + 15) & ~uint32_t(15));
+    const auto SavedVecOffset = static_cast<uint32_t>((SavedContextPtrOffset + SavedContextPtrSize + 15) & ~uint32_t(15));
 #if defined(_WIN64)
     TheAssembler.bind(BeginLabel);
 #endif
     const auto FrameState = EmitManualThunkProlog(TheAssembler, FManualThunkFramePlan {
         .PushedGpRegs = bSafe ? GetPlatformNonVolatileGpRegs() : std::vector<Gp> {},
         .SavedVecRegs = bSafe ? GetPlatformNonVolatileVecRegs() : std::vector<Vec> {},
-        .RawStackAllocation = static_cast<uint32_t>((bSafe ? SavedVecOffset + NonVolatileVecStackSpace : ShadowArgSpace)),
+        .RawStackAllocation = static_cast<uint32_t>(bSafe ? SavedVecOffset + NonVolatileVecStackSpace : SavedContextPtrOffset + SavedContextPtrSize),
         .SavedVecOffset = SavedVecOffset,
     });
     auto GpScratchReg = GetPlatformGpScratchReg();
@@ -183,7 +185,10 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
     const auto ContextReg = SrcInfo.GetArgumentIntegralRegisters()[0];
     const auto ContextPtr = ptr(ContextReg);
     const auto ArgContextPtr = ContextPtr.clone_adjusted(ArgumentContext::ArgsOffset);
+    const auto SavedContextPtr = ptr(rsp, static_cast<int32_t>(SavedContextPtrOffset));
     int32_t DeferredContextArgOffset = -1;
+
+    TheAssembler.mov(SavedContextPtr, ContextReg);
 
     // move arguments from context to call position, excluding ContextReg
     for (auto Index = 0; auto& FuncValue : DestInfo.GetArguments()) {
@@ -248,6 +253,20 @@ FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature 
 
     // make the call
     TheAssembler.call(CallTo);
+
+    if (!DestInfo.GetReturnValues().empty()) {
+        auto& Val = DestInfo.GetReturnValues()[0];
+        TheAssembler.mov(GpScratchReg, SavedContextPtr);
+        if (TypeUtils::is_int(Val.type_id())) {
+            TheAssembler.mov(ptr(GpScratchReg, ArgumentContext::ReturnValueOffset), gpq(Val.reg_id()));
+        }
+        else if (TypeUtils::is_float(Val.type_id())) {
+            TheAssembler.movq(ptr(GpScratchReg, ArgumentContext::ReturnValueOffset), xmm(Val.reg_id()));
+        }
+        else {
+            return std::unexpected(MakeThunkError(EThunkErrorCode::UnsupportedType, "Argument binding thunk encountered an unsupported return type."));
+        }
+    }
 
     EmitManualThunkEpilog(TheAssembler, FrameState);
     TheAssembler.ret();

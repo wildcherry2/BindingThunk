@@ -367,7 +367,6 @@ FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *Bi
     TheAssembler.call(ToFn);
 
     // if there's a return value, make sure it's in the right register. we don't support return types that take multiple registers or other weirdness
-    // todo test if asmjit figures out return type calling conventions
     if (Flag & 1) {
         auto& Val = SrcInfo.GetReturnValues()[0];
         if (TypeUtils::is_int(Val.type_id())) {
