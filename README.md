@@ -15,6 +15,24 @@ Generally, a thunk can be generated to bind a single pointer to the first argume
 Thunks can also be generated that both bind a pointer, pack unbound arguments a structure, call the target function with the structure and bound argument, and return the return value that's set in the structure. These `ArgumentContext`-based thunks can be used to 'normalize' the arguments of various functions and redirect function calls to a single function type.<br><br>
 For any generated thunk, the bound argument must outlive the thunk for safe use. A generated thunk is returned as a `std::unique_ptr` with a specialized deleter that cleans it up. Calling a generated thunk requires calling `get` on the returned `std::unique_ptr` and casting it to the correct function pointer type. If you're wondering why we don't carry over template parameters that cut out the need to cast, it's primarily to make the pointer easier to pass around in different environments.
 
+## Build Instructions
+This project uses CMake presets and expects a C++23-capable toolchain plus Ninja.
+
+To build the default static library in Debug:
+```bash
+cmake --preset debug-static
+cmake --build --preset debug-static
+```
+
+To build the static library with unit tests:
+```bash
+cmake --preset debug-static-tests
+cmake --build --preset debug-static-tests
+ctest --preset debug-static-tests
+```
+
+Other available presets include `debug-static-example`, `debug-shared`, `debug-shared-tests`, `debug-shared-example`, `release-static`, and `release-shared`.
+
 ## Platform-Specific and General Quirks
 ### General:
 * If you use `ArgumentContext`, then you must retrieve arguments passed by reference as a pointer. So, if you have a thunk signature like `void Fn(int& Ref, double RandomArg)` which calls a bound function like `void Target(void* BoundValue, ArgumentContext& Context)`, then you'd retrieve the `Ref` argument with `Context.GetArgumentAs<int*>(0)` and use it like a pointer after verifying that it didn't return an error.
