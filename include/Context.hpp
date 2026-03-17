@@ -143,6 +143,7 @@ public:
             _ReturnValue = std::bit_cast<uint64_t>(value);
         }
         else {
+            static_assert(sizeof(T) < sizeof(uint64_t), "ArgumentContext only uses memcpy fallback for return values smaller than 64 bits.");
             static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable return types.");
             uint64_t Raw {};
             std::memcpy(&Raw, &value, sizeof(T));
@@ -173,6 +174,7 @@ private:
             return std::bit_cast<T>(Raw);
         }
         else {
+            static_assert(sizeof(T) < sizeof(uint64_t), "ArgumentContext only uses memcpy fallback for packed values smaller than 64 bits.");
             static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable packed values.");
             T Value {};
             std::memcpy(&Value, &Raw, sizeof(T));
