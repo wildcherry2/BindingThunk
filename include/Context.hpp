@@ -4,7 +4,9 @@
 
 #pragma once
 #include <bit>
+#include <cstring>
 #include <cstdint>
+#include <type_traits>
 #include <asmjit/x86.h>
 #include <unordered_map>
 #include "Common.hpp"
@@ -95,10 +97,19 @@ public:
      */
     template<typename T>
     std::expected<T, EThunkErrorCode> GetArgumentAs(const uint64_t Index) const noexcept {
+        static_assert(sizeof(T) <= sizeof(uint64_t), "ArgumentContext only supports argument types up to 64 bits.");
         if (Index >= _ArgsCount) {
             return std::unexpected(EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex);
         }
-        return std::bit_cast<T>(_Data[Index]);
+        if constexpr (sizeof(T) == sizeof(uint64_t)) {
+            return std::bit_cast<T>(_Data[Index]);
+        }
+        else {
+            static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable argument types.");
+            T Value {};
+            std::memcpy(&Value, &_Data[Index], sizeof(T));
+            return Value;
+        }
     }
 
     /** @brief Returns whether the original function had a return value slot. */
@@ -116,8 +127,16 @@ public:
      */
     template<typename T>
     void SetReturnValue(const T value) noexcept {
-        static_assert(sizeof(T) <= sizeof(uint64_t), "Only types convertible to uint64_t supported!"); // todo use proper type transform later
-        _ReturnValue = std::bit_cast<uint64_t>(value);
+        static_assert(sizeof(T) <= sizeof(uint64_t), "ArgumentContext only supports return types up to 64 bits.");
+        if constexpr (sizeof(T) == sizeof(uint64_t)) {
+            _ReturnValue = std::bit_cast<uint64_t>(value);
+        }
+        else {
+            static_assert(std::is_trivially_copyable_v<T>, "ArgumentContext only supports trivially copyable return types.");
+            uint64_t Raw {};
+            std::memcpy(&Raw, &value, sizeof(T));
+            _ReturnValue = Raw;
+        }
     }
 
     inline static constexpr uint64_t FlagsOffset = 0; ///< Byte offset of the flags field from the context base.

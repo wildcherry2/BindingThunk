@@ -475,6 +475,23 @@ TEST(ContextTests, GetArgumentAsSupportsQualifiedScalarTypes) {
     EXPECT_DOUBLE_EQ(Result.value(), 6.25);
 }
 
+TEST(ContextTests, GetArgumentAsSupportsNarrowScalarTypes) {
+    auto Storage = MakeArgumentContextStorage(2);
+    auto& Context = GetArgumentContext(Storage);
+    const int32_t IntegerValue = -1234567;
+    const float FloatValue = 3.25f;
+
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset, IntegerValue);
+    WriteArgumentContextField(Context, ArgumentContext::ArgsOffset + ArgumentContext::ArgumentSize, FloatValue);
+
+    const auto IntegerResult = Context.GetArgumentAs<int32_t>(0);
+    const auto FloatResult = Context.GetArgumentAs<float>(1);
+    ASSERT_TRUE(IntegerResult.has_value());
+    ASSERT_TRUE(FloatResult.has_value());
+    EXPECT_EQ(IntegerResult.value(), IntegerValue);
+    EXPECT_FLOAT_EQ(FloatResult.value(), FloatValue);
+}
+
 TEST(ContextTests, GetArgumentAsReadsScalarAndPointerArgumentsFromRawStorage) {
     auto Storage = MakeArgumentContextStorage(2);
     auto& Context = GetArgumentContext(Storage);
@@ -520,12 +537,20 @@ TEST(ContextTests, SetReturnValueSupportsRawAndTypedWrites) {
     auto Storage = MakeArgumentContextStorage(0);
     auto& Context = GetArgumentContext(Storage);
     int Value = 13;
+    const int32_t NarrowValue = -37;
+    const float FloatValue = 4.75f;
 
     Context.SetReturnValue(0xfeedfacecafebeefULL);
     EXPECT_EQ(ReadArgumentContextField<uint64_t>(Context, ArgumentContext::ReturnValueOffset), 0xfeedfacecafebeefULL);
 
     Context.SetReturnValue(&Value);
     EXPECT_EQ(ReadArgumentContextField<int*>(Context, ArgumentContext::ReturnValueOffset), &Value);
+
+    Context.SetReturnValue(NarrowValue);
+    EXPECT_EQ(ReadArgumentContextField<int32_t>(Context, ArgumentContext::ReturnValueOffset), NarrowValue);
+
+    Context.SetReturnValue(FloatValue);
+    EXPECT_FLOAT_EQ(ReadArgumentContextField<float>(Context, ArgumentContext::ReturnValueOffset), FloatValue);
 }
 
 TEST(ContextTests, RegisterContextStackUnderflowInvokesFatalHandler) {
