@@ -228,11 +228,16 @@ static std::optional<FThunkError> RegisterThunkWindowsUnwind(
         );
     }
 
-    if (EndOffset <= BeginOffset || UnwindOffset <= EndOffset) {
-        return MakeThunkError(
-            EThunkErrorCode::WindowsUnwindRegistrationFailed,
-            "Windows unwind registration encountered malformed function or unwind offsets."
-        );
+    if (EndOffset <= BeginOffset || UnwindOffset < EndOffset) {
+        return FThunkError {
+            .Code = EThunkErrorCode::WindowsUnwindRegistrationFailed,
+            .Message = std::format(
+                L"Windows unwind registration encountered malformed offsets. Begin={}, End={}, Unwind={}.",
+                BeginOffset,
+                EndOffset,
+                UnwindOffset
+            )
+        };
     }
 
     auto* Registration = static_cast<FRegisteredThunkWindowsUnwind*>(std::malloc(sizeof(FRegisteredThunkWindowsUnwind)));
@@ -391,6 +396,80 @@ void FThunkDeleter::operator()(void* Thunk) const noexcept
     }
 #endif
     return (void)GetJitRuntime().release(Thunk);
+}
+
+std::optional<FThunkError> ABISignature::SetArgumentSlot(uint32_t Index, ArgumentType Type) noexcept {
+    if (Index >= _Args.size()) return FThunkError {
+        .Code = EThunkErrorCode::ABISignatureArgumentIndexOutOfBounds, // todo make any FThunkErrors not unnecessarily use the MakeThunkError function that does a conversion
+        .Message = std::format(L"SetArgumentSlot Index {} is out of bounds! Max amount of arguments supported is {}.", Index, _Args.size())
+    };
+
+    if (Type < ArgumentType::Minimum || Type > ArgumentType::Maximum) return FThunkError {
+        .Code = EThunkErrorCode::ABISignatureInvalidEnumValue,
+        .Message = std::format(L"SetArgumentSlot enum value {} is out of bounds!", static_cast<uint32_t>(Type))
+    };
+
+    _Args[Index] = Type;
+    if (const auto SignedIndex = static_cast<int>(Index); SignedIndex > _LargestSetArgIndex) {
+        _LargestSetArgIndex = SignedIndex;
+    }
+
+    return {};
+}
+
+std::optional<FThunkError> ABISignature::SetReturnSlot(ReturnType Type) noexcept {
+    if (Type < ReturnType::Minimum || Type > ReturnType::Maximum) return FThunkError {
+        .Code = EThunkErrorCode::ABISignatureInvalidEnumValue,
+        .Message = std::format(L"SetReturnSlot enum value {} is out of bounds!", static_cast<uint32_t>(Type))
+    };
+
+    _ReturnType = Type;
+    return {};
+}
+
+std::expected<FuncSignature, FThunkError> ABISignature::Finalize() const noexcept {
+    FuncSignature Out{};
+    switch (_ReturnType) {
+        case ReturnType::Integral: {
+            Out.set_ret(asmjit::TypeId::kUInt64);
+            break;
+        }
+        case ReturnType::Void: {
+            Out.set_ret(asmjit::TypeId::kVoid);
+            break;
+        }
+        case ReturnType::Floating: {
+            Out.set_ret(asmjit::TypeId::kFloat64);
+            break;
+        }
+        default: {
+            return std::unexpected(FThunkError{
+                .Code = EThunkErrorCode::ABISignatureMissingReturnValue,
+                .Message = L"Missing return type in ABISignature during Finalize()!"
+            });
+        }
+    }
+
+    for (int ArgIndex = 0; ArgIndex <= _LargestSetArgIndex; ++ArgIndex) {
+        switch (_Args[ArgIndex]) {
+            case ArgumentType::Integral: {
+                Out.add_arg(asmjit::TypeId::kUInt64);
+                break;
+            }
+            case ArgumentType::Floating: {
+                Out.add_arg(asmjit::TypeId::kFloat64);
+                break;
+            }
+            default: {
+                return std::unexpected(FThunkError{
+                    .Code = EThunkErrorCode::ABISignatureMissingArgumentValue,
+                    .Message = std::format(L"Missing argument value at index {}!", ArgIndex)
+                });
+            }
+        }
+    }
+
+    return Out;
 }
 
 /** @copydoc FuncArgInfo::FuncArgInfo */

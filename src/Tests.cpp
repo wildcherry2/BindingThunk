@@ -1327,7 +1327,7 @@ TEST(BindingThunkTests, ArgumentRestoreThunkRejectsUnsupportedRegisterArgumentTy
     auto Signature = FuncSignature::build<void>();
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = GenerateRestoreThunk(reinterpret_cast<void*>(&OriginalArgumentNoArgs), Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateRestoreThunk(reinterpret_cast<void*>(&OriginalArgumentNoArgs), Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1340,7 +1340,7 @@ TEST(BindingThunkTests, ArgumentRestoreThunkRejectsUnsupportedStackArgumentTypes
     Signature.add_arg(asmjit::TypeId::kInt32);
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = GenerateRestoreThunk(reinterpret_cast<void*>(&OriginalArgumentNoArgs), Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateRestoreThunk(reinterpret_cast<void*>(&OriginalArgumentNoArgs), Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1353,7 +1353,7 @@ TEST(BindingThunkTests, DefaultComplexShiftRejectsUnsupportedArgumentTypes) {
     Signature.add_arg(asmjit::TypeId::kInt32);
     Signature.add_arg(asmjit::TypeId::kInt32);
 
-    auto Result = GenerateBindingThunk(reinterpret_cast<void*>(&DefaultComplexFloatIntCallback), nullptr, Signature, EBindingThunkType::Default);
+    auto Result = Internal::GenerateBindingThunk(reinterpret_cast<void*>(&DefaultComplexFloatIntCallback), nullptr, Signature, EBindingThunkType::Default);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1367,7 +1367,7 @@ TEST(BindingThunkTests, DefaultComplexShiftRejectsUnsupportedReturnTypes) {
     Signature.add_arg(asmjit::TypeId::kInt32);
     Signature.add_arg(asmjit::TypeId::kInt32);
 
-    auto Result = GenerateBindingThunk(reinterpret_cast<void*>(&DefaultComplexFloatIntCallback), nullptr, Signature, EBindingThunkType::Default);
+    auto Result = Internal::GenerateBindingThunk(reinterpret_cast<void*>(&DefaultComplexFloatIntCallback), nullptr, Signature, EBindingThunkType::Default);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1376,7 +1376,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedRegisterArgumentTypes) 
     auto Signature = FuncSignature::build<int>();
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1389,7 +1389,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedStackArgumentTypes) {
     Signature.add_arg(asmjit::TypeId::kInt32);
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1398,7 +1398,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedReturnTypes) {
     auto Signature = FuncSignature::build<void>();
     Signature.set_ret(asmjit::TypeId::kMask32);
 
-    auto Result = GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }

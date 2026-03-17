@@ -3,6 +3,7 @@
  */
 
 #pragma once
+#include <array>
 #include <asmjit/x86.h>
 #include <expected>
 #include <type_traits>
@@ -80,6 +81,10 @@ enum class EThunkErrorCode {
     JitAddFailed, ///< The finalized code could not be added to the JIT runtime.
     WindowsUnwindRegistrationFailed, ///< Windows unwind metadata could not be generated or registered.
     ArgumentContextOutOfBoundsArgumentIndex, ///< An @ref ArgumentContext lookup addressed an argument outside the stored range.
+    ABISignatureArgumentIndexOutOfBounds, ///< @ref ABISignature::SetArgumentSlot index was out of bounds.
+    ABISignatureInvalidEnumValue, ///< @ref ABISignature setter was given invalid enum (ArgumentType or ReturnType) value.
+    ABISignatureMissingReturnValue, ///< @ref ABISignature has unset return type when Finalize() is called.
+    ABISignatureMissingArgumentValue, ///< @ref ABISignature has unset argument type(s) when Finalize() is called (a gap of unknown arguments between set arguments).
 };
 
 /** @brief Describes an error returned from thunk generation. */
@@ -91,9 +96,92 @@ struct THUNK_API FThunkError {
 /** @brief Result type returned by thunk creation APIs. */
 using FThunkResult = std::expected<FThunkPtr, FThunkError>;
 
-/** @brief Normalizes argument and return placement metadata for a function signature.
+/** @brief Wrapper for @c asmjit::FuncSignature that simplifies manual signature generation. */
+struct THUNK_API ABISignature {
+    enum class ArgumentType {
+        Unknown,
+        Integral,
+        Floating,
+
+        Minimum = Unknown,
+        Maximum = Floating
+    };
+
+    enum class ReturnType {
+        Unknown,
+        Void,
+        Integral,
+        Floating,
+
+        Minimum = Unknown,
+        Maximum = Floating
+    };
+
+    std::optional<FThunkError> SetArgumentSlot(uint32_t Index, ArgumentType Type) noexcept;
+    std::optional<FThunkError> SetReturnSlot(ReturnType Type) noexcept;
+    std::expected<FuncSignature, FThunkError> Finalize() const noexcept;
+
+    template<typename T>
+    std::optional<FThunkError> SetArgumentSlot(const uint32_t Index) noexcept {
+        using CompatType = AsmJitCompatArgV<T>;
+        if constexpr(std::is_floating_point_v<CompatType>) {
+            return SetArgumentSlot(Index, ArgumentType::Floating);
+        }
+        else {
+            return SetArgumentSlot(Index, ArgumentType::Integral);
+        }
+    }
+
+    template<typename T>
+    std::optional<FThunkError> SetReturnSlot() noexcept {
+        using CompatType = AsmJitCompatRetV<T>;
+        if constexpr(std::is_void_v<CompatType>) {
+            return SetReturnSlot(ReturnType::Void);
+        }
+        else if constexpr(std::is_floating_point_v<CompatType>) {
+            return SetReturnSlot(ReturnType::Floating);
+        }
+        else {
+            return SetReturnSlot(ReturnType::Integral);
+        }
+    }
+
+private:
+    std::array<ArgumentType, asmjit::Globals::kMaxFuncArgs> _Args{};
+    int _LargestSetArgIndex = -1;
+    ReturnType _ReturnType{ ReturnType::Unknown };
+};
+
+namespace Internal {
+    /** @brief Builds an @ref ABISignature from typed template parameters with public error propagation. */
+    template<typename InReturnType, typename... InArgs>
+    std::expected<ABISignature, FThunkError> BuildABISignature() noexcept {
+        ABISignature Signature{};
+        if (auto Error = Signature.template SetReturnSlot<InReturnType>()) {
+            return std::unexpected(*Error);
+        }
+
+        std::optional<FThunkError> ArgumentError{};
+        uint32_t ArgumentIndex = 0;
+        const auto AllArgumentsSet = (... && [&] {
+            if (auto Error = Signature.template SetArgumentSlot<InArgs>(ArgumentIndex++)) {
+                ArgumentError = *Error;
+                return false;
+            }
+            return true;
+        }());
+
+        if (!AllArgumentsSet) {
+            return std::unexpected(*ArgumentError);
+        }
+
+        return Signature;
+    }
+}
+
+/** @brief Internal helper that normalizes argument and return placement metadata for a function signature.
  *
- *  This wrapper caches register masks, assigned @c asmjit::FuncValue entries, and the fully
+ *  This wrapper caches register masks, assigned and flattened @c asmjit::FuncValue entries, and the fully
  *  initialized @c asmjit::FuncDetail so the code generators can reason about a signature without
  *  repeating ABI queries.
  */

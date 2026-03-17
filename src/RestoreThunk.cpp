@@ -17,8 +17,18 @@ static int32_t GetArgumentContextOffset(const size_t Index) {
     return static_cast<int32_t>(ArgumentContext::ArgumentSize * Index);
 }
 
-/** @copydoc GenerateRestoreThunk(void*, FuncSignature, EBindingThunkType, bool) */
-FThunkResult GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
+/** @copydoc GenerateRestoreThunk(void*, const ABISignature&, EBindingThunkType, bool) */
+FThunkResult GenerateRestoreThunk(void* CallTo, const ABISignature& Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
+    auto FinalizedSignature = Signature.Finalize();
+    if (!FinalizedSignature) {
+        return std::unexpected(FinalizedSignature.error());
+    }
+
+    return Internal::GenerateRestoreThunk(CallTo, FinalizedSignature.value(), BindingType, bLogAssembly);
+}
+
+/** @copydoc Internal::GenerateRestoreThunk(void*, FuncSignature, EBindingThunkType, bool) */
+FThunkResult Internal::GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
     switch (BindingType) {
         case EBindingThunkType::Default:
             return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Default binding thunks do not require a restore thunk."));

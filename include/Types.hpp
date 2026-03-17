@@ -48,12 +48,15 @@ namespace Detail {
     template<typename T>
     concept ReturnedByReference = !ReturnedByValue<T>;
 
-    /** @brief Maps an argument type to the form AsmJit should see if the user did not specialize the trait. */
+    /** @brief Maps an argument type to the form AsmJit should see if the user did not specialize the trait.
+     *
+     *  Unsupported non-floating forms fall back to a 64-bit integer register class because thunk codegen only
+     *  needs to know whether the ABI uses a general-purpose or floating-point register bank for the value.
+     */
     template<typename T>
     struct AsmJitCompatArgNotSpecialized {
         using Type = std::conditional_t<ScalarOrReference<T> || ClassOrUnionValueActuallyPassedByValue<T>, T,
-                        std::conditional_t<ClassOrUnionValueActuallyPassedByReference<T>, T&, AlwaysFalse<T>>>;
-        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "User-specialized AsmJitCompatArg is not supported! Make sure it's coerced into a pointer, reference, or scalar!");
+                        std::conditional_t<ClassOrUnionValueActuallyPassedByReference<T>, T&, uint64_t>>;
     };
 
     /** @brief Maps a return type to the form AsmJit should see if the user did not specialize the trait. */
@@ -83,32 +86,31 @@ namespace Detail {
     template<typename T>
     struct AsmJitCompatArgNotSpecialized {
         using Type = AlwaysFalse<T>;
-        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build FuncSignature manually on this platform.");
+        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build ABISignature manually on this platform.");
     };
 
     /** @brief Placeholder mapping used to force an explanatory static assertion on unsupported platforms. */
     template<typename T>
     struct AsmJitCompatRetNotSpecialized {
         using Type = AlwaysFalse<T>;
-        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build FuncSignature manually on this platform.");
+        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build ABISignature manually on this platform.");
     };
 #endif
 }
 
 #if defined(_WIN32)
-/** @brief Maps a C++ argument type to the form expected by AsmJit signature generation. */
+/** @brief Maps a C++ argument type to the form expected by AsmJit signature generation and the ABI. */
 template<typename T>
 struct AsmJitCompatArg {
     using Type = std::conditional_t<Detail::ScalarOrReference<T> || Detail::ClassOrUnionValueActuallyPassedByValue<T>, T,
-                    std::conditional_t<Detail::ClassOrUnionValueActuallyPassedByReference<T>, T&, Detail::AlwaysFalse<T>>>;
-    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "T is not a supported type for argument type deduction! Manually make FuncSignature instead or specialize if you know it's passed by reference, pointer, or value!");
+                    std::conditional_t<Detail::ClassOrUnionValueActuallyPassedByReference<T>, T&, uint64_t>>;
 };
 
-/** @brief Maps a C++ return type to the form expected by AsmJit signature generation. */
+/** @brief Maps a C++ return type to the form expected by AsmJit signature generation and the ABI. */
 template<typename T>
 struct AsmJitCompatRet {
     using Type = std::conditional_t<Detail::ReturnedByValue<T>, T, Detail::AlwaysFalse<T>>;
-    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "T is not a supported type for return type deduction! Manually make FuncSignature instead or specialize if you know it's returned by value!");
+    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "T is not a supported type for return type deduction! Manually make ABISignature instead or specialize if you know it's returned by value!");
 };
 
 /** @brief Specialization that preserves @c void returns. */
@@ -121,14 +123,14 @@ struct AsmJitCompatRet<void> {
 template<typename T>
 struct AsmJitCompatArg {
     using Type = Detail::AlwaysFalse<T>;
-    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build FuncSignature manually on this platform.");
+    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build ABISignature manually on this platform.");
 };
 
 /** @brief Unsupported-platform placeholder for return type deduction. */
 template<typename T>
 struct AsmJitCompatRet {
     using Type = Detail::AlwaysFalse<T>;
-    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build FuncSignature manually on this platform.");
+    static_assert(!std::is_same_v<Type, Detail::AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build ABISignature manually on this platform.");
 };
 #endif
 

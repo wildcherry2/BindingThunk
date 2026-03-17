@@ -44,8 +44,18 @@ THUNK_API FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgI
 static FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 THUNK_API FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 
-/** @copydoc GenerateBindingThunk(void*, void*, FuncSignature, EBindingThunkType, bool) */
-FThunkResult GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+/** @copydoc GenerateBindingThunk(void*, void*, const ABISignature&, EBindingThunkType, bool) */
+FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, const ABISignature& SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+    auto FinalizedSignature = SourceSignature.Finalize();
+    if (!FinalizedSignature) {
+        return std::unexpected(FinalizedSignature.error());
+    }
+
+    return Internal::GenerateBindingThunk(ToFn, BindParam, FinalizedSignature.value(), Type, bLogAssembly);
+}
+
+/** @copydoc Internal::GenerateBindingThunk(void*, void*, FuncSignature, EBindingThunkType, bool) */
+FThunkResult Internal::GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     auto InvokeSignature = ShiftSignature(SourceSignature);
     FuncArgInfo SrcSig{SourceSignature};
     FuncArgInfo DestSig{InvokeSignature};
@@ -301,8 +311,18 @@ THUNK_API FThunkResult GenerateShiftWithRegisterContext(void* ToFn, void* BindPa
 #endif
 }
 
-/** @copydoc GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, FuncSignature, EBindingThunkType, bool) */
-FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+/** @copydoc GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, const ABISignature&, EBindingThunkType, bool) */
+FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, const ABISignature& SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+    auto FinalizedSignature = SourceSignature.Finalize();
+    if (!FinalizedSignature) {
+        return std::unexpected(FinalizedSignature.error());
+    }
+
+    return Internal::GenerateBindingThunk(ToFn, BindParam, FinalizedSignature.value(), Type, bLogAssembly);
+}
+
+/** @copydoc Internal::GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, FuncSignature, EBindingThunkType, bool) */
+FThunkResult Internal::GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
     using namespace asmjit;
     using namespace asmjit::x86;
 
