@@ -12,7 +12,7 @@ This is consistent with C++'s design; no code is generated at runtime, but in or
 
 ## General Use Cases
 Generally, a thunk can be generated to bind a single pointer to the first argument position. This can theoretically be a pointer to anything, though the most useful option is to bind a `this` pointer to a member function, effectively making a free-function version of a member function that can be passed anywhere. Note that most examples are simpler free-function bindings.<br><br>
-Thunks can also be generated that both bind a pointer, pack unbound arguments a structure, call the target function with the structure and bound argument, and return the return value that's set in the structure. These `ArgumentContext`-based thunks can be used to 'normalize' the arguments of various functions and redirect function calls to a single function type.<br><br>
+Thunks can also be generated that bind a pointer, pack unbound arguments a structure, call the target function with the structure and bound argument, and return the return value that's set in the structure. These `ArgumentContext`-based thunks can be used to 'normalize' the arguments of various functions and redirect function calls to a single function type.<br><br>
 For any generated thunk, the bound argument must outlive the thunk for safe use. A generated thunk is returned as a `std::unique_ptr` with a specialized deleter that cleans it up. Calling a generated thunk requires calling `get` on the returned `std::unique_ptr` and casting it to the correct function pointer type. If you're wondering why we don't carry over template parameters that cut out the need to cast, it's primarily to make the pointer easier to pass around in different environments.
 
 ## Build Instructions
