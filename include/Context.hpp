@@ -80,6 +80,10 @@ namespace BindingThunk {
 	 *
 	 *  The fixed header stores flags, a single return value slot, and the number of packed
 	 *  arguments. Each packed argument then occupies one 64-bit slot in the trailing array.
+	 *
+	 *  It's possible to extend this class to add on more functionality, just ensure that you don't
+	 *  add virtual functions or member variables, since the allocation for this object is done
+	 *  completely in ASM.
 	 */
 	class THUNK_API ArgumentContext {
 	public:
