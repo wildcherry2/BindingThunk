@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 4.1)
 project(BindingThunk LANGUAGES CXX)
 
+include(CMakePackageConfigHelpers)
 include(FetchContent)
+include(GNUInstallDirs)
 
 option(THUNK_BUILD_SHARED "Build BindingThunk as a shared library" OFF)
 option(THUNK_BUILD_EXAMPLE "Build the example executable" OFF)
 option(THUNK_BUILD_TESTS "Build the unit tests" OFF)
+
+set(THUNK_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/BindingThunk")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,12 +59,13 @@ target_sources(BindingThunk
 
 target_include_directories(BindingThunk
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(BindingThunk
     PUBLIC
-        asmjit
+        asmjit::asmjit
 )
 
 target_compile_features(BindingThunk PUBLIC cxx_std_23)
@@ -77,6 +82,32 @@ if (THUNK_BUILD_SHARED)
             THUNK_EXPORTS
     )
 endif ()
+
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BindingThunkConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/BindingThunkConfig.cmake
+    INSTALL_DESTINATION ${THUNK_INSTALL_CMAKEDIR}
+)
+
+install(TARGETS BindingThunk
+    EXPORT BindingThunkTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    FILE_SET HEADERS DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+install(EXPORT BindingThunkTargets
+    FILE BindingThunkTargets.cmake
+    NAMESPACE BindingThunk::
+    DESTINATION ${THUNK_INSTALL_CMAKEDIR}
+)
+
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/BindingThunkConfig.cmake
+    DESTINATION ${THUNK_INSTALL_CMAKEDIR}
+)
 
 if (THUNK_BUILD_EXAMPLE)
     add_executable(BindingThunkExample src/main.cpp)
