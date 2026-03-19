@@ -113,6 +113,20 @@ namespace BindingThunk {
 	        }
 	    }
 
+		/** @brief Gets the raw 8-byte value at the argument index.
+		 * @param Index Zero-based packed argument index.
+		 * @details This is an 'escape hatch' from the type system. This could be a pointer, reference, reference to caller-allocated copy,
+		 * value, or part of a larger structure (Linux); the invoker of this function is responsible for using it properly.
+		 * @return The requested value or @ref EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex if @p Index is invalid.
+		 */
+		std::expected<uint64_t, EThunkErrorCode> GetArgumentRaw(const uint64_t Index) const noexcept {
+	    	if (Index >= _ArgsCount) {
+	    		return std::unexpected(EThunkErrorCode::ArgumentContextOutOfBoundsArgumentIndex);
+	    	}
+
+	    	return _Data[Index];
+	    }
+
 	    /** @brief Returns whether the original function had a return value slot. */
 	    [[nodiscard]] bool HasReturnValue() const noexcept { return _Flags & HasReturnValueFlag; }
 	    /** @brief Returns whether a register context follows the packed argument array. */
