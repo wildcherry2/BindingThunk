@@ -53,7 +53,7 @@ namespace BindingThunk {
 	 */
 	template<typename BindParamType, typename InReturnType, typename... InArgs>
 	THUNK_API FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const EBindingThunkType BindingType = EBindingThunkType::Default, const bool bLogAssembly = false) {
-	    auto SourceSignature = Internal::BuildABISignature<InReturnType, InArgs...>();
+	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
 	    if (!SourceSignature) {
 	        return std::unexpected(SourceSignature.error());
 	    }
@@ -87,7 +87,7 @@ namespace BindingThunk {
 	 */
 	template<typename BindParamType, typename InReturnType, typename... InArgs>
 	THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, EBindingThunkType Type = EBindingThunkType::Argument, const bool bLogAssembly = false) {
-	    auto SourceSignature = Internal::BuildABISignature<InReturnType, InArgs...>();
+	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
 	    if (!SourceSignature) {
 	        return std::unexpected(SourceSignature.error());
 	    }

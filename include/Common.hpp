@@ -95,31 +95,65 @@ namespace BindingThunk {
 	/** @brief Result type returned by thunk creation APIs. */
 	using FThunkResult = std::expected<FThunkPtr, FThunkError>;
 
-	/** @brief Wrapper for @c asmjit::FuncSignature that simplifies manual signature generation. */
+	/** @brief Public builder for ABI-level function signatures used by thunk generation.
+	 *
+	 *  `ABISignature` is a small, validation-oriented wrapper around @c asmjit::FuncSignature.
+	 *  It lets callers describe a function in terms of ABI slots instead of raw AsmJit value
+	 *  objects, which is often enough for thunk generation on supported platforms.
+	 *
+	 *  Argument slots are ABI-level slots, not necessarily source-language parameters. This
+	 *  distinction matters for calling conventions that can split one C++ parameter across
+	 *  multiple ABI arguments or that materialize hidden return-storage pointers. In those
+	 *  cases you should populate the slots manually instead of relying on template deduction.
+	 *
+	 *  Typical usage is either:
+	 *  - Manually populate the return slot and each argument slot, then call @ref Finalize.
+	 *  - Use @ref BuildABISignature to derive the slot layout from a C++ function type when
+	 *    the ABI mapping is representable by the supported `AsmJitCompat*` traits.
+	 */
 	struct THUNK_API ABISignature {
+	    /** @brief ABI classification for a single argument slot. */
 	    enum class ArgumentType {
-	        Unknown,
-	        Integral,
-	        Floating,
+	        Unknown, ///< Slot has not been assigned yet.
+	        Integral, ///< Slot is passed through the platform's integer/pointer ABI path.
+	        Floating, ///< Slot is passed through the platform's floating-point/vector ABI path.
 
 	        Minimum = Unknown,
 	        Maximum = Floating
 	    };
 
+	    /** @brief ABI classification for the function return slot. */
 	    enum class ReturnType {
-	        Unknown,
-	        Void,
-	        Integral,
-	        Floating,
+	        Unknown, ///< Return type has not been assigned yet.
+	        Void, ///< Function does not return a value.
+	        Integral, ///< Return value uses the platform's integer/pointer ABI path.
+	        Floating, ///< Return value uses the platform's floating-point/vector ABI path.
 
 	        Minimum = Unknown,
 	        Maximum = Floating
 	    };
 
+	    /** @brief Assigns the ABI class of one argument slot.
+	     *  @param Index Zero-based ABI argument slot index.
+	     *  @param Type ABI class to assign to that slot.
+	     *  @return An error when @p Index or @p Type is invalid; otherwise @c std::nullopt.
+	     */
 	    std::optional<FThunkError> SetArgumentSlot(uint32_t Index, ArgumentType Type) noexcept;
+	    /** @brief Assigns the ABI class of the function return slot.
+	     *  @param Type ABI class to assign to the return value.
+	     *  @return An error when @p Type is invalid; otherwise @c std::nullopt.
+	     */
 	    std::optional<FThunkError> SetReturnSlot(ReturnType Type) noexcept;
+	    /** @brief Converts the validated slot description into an @c asmjit::FuncSignature.
+	     *  @return Finalized signature on success, or an error if required slots are still unset.
+	     */
 	    std::expected<FuncSignature, FThunkError> Finalize() const noexcept;
 
+	    /** @brief Assigns an argument slot using the public `AsmJitCompatArg` trait machinery.
+	     *  @tparam T C++ type to map onto an ABI argument classification.
+	     *  @param Index Zero-based ABI argument slot index.
+	     *  @return An error when the slot assignment fails; otherwise @c std::nullopt.
+	     */
 	    template<typename T>
 	    std::optional<FThunkError> SetArgumentSlot(const uint32_t Index) noexcept {
 	        using CompatType = AsmJitCompatArgV<T>;
@@ -131,6 +165,10 @@ namespace BindingThunk {
 	        }
 	    }
 
+	    /** @brief Assigns the return slot using the public `AsmJitCompatRet` trait machinery.
+	     *  @tparam T C++ return type to map onto an ABI return classification.
+	     *  @return An error when the slot assignment fails; otherwise @c std::nullopt.
+	     */
 	    template<typename T>
 	    std::optional<FThunkError> SetReturnSlot() noexcept {
 	        using CompatType = AsmJitCompatRetV<T>;
@@ -145,38 +183,46 @@ namespace BindingThunk {
 	        }
 	    }
 
+	    /** @brief Builds an `ABISignature` from a C++-level return type and argument list.
+	     *
+	     *  This helper uses the same public compatibility traits as the slot-based setters, so
+	     *  it is only valid when each source-language type maps cleanly to the ABI model exposed
+	     *  by this library. If a platform ABI splits parameters, inserts hidden parameters, or
+	     *  otherwise cannot be represented by those traits, build the signature manually instead.
+	     *
+	     *  @tparam InReturnType C++ return type to expose from the generated thunk.
+	     *  @tparam InArgs C++ argument types to expose from the generated thunk.
+	     *  @return A populated `ABISignature`, or the first validation error encountered.
+	     */
+	    template<typename InReturnType, typename... InArgs>
+	    static std::expected<ABISignature, FThunkError> BuildABISignature() noexcept {
+	        ABISignature Signature{};
+	        if (auto Error = Signature.template SetReturnSlot<InReturnType>()) {
+	            return std::unexpected(*Error);
+	        }
+
+	        std::optional<FThunkError> ArgumentError{};
+	        uint32_t ArgumentIndex = 0;
+	        const auto AllArgumentsSet = (... && [&] {
+	            if (auto Error = Signature.template SetArgumentSlot<InArgs>(ArgumentIndex++)) {
+	                ArgumentError = *Error;
+	                return false;
+	            }
+	            return true;
+	        }());
+
+	        if (!AllArgumentsSet) {
+	            return std::unexpected(*ArgumentError);
+	        }
+
+	        return Signature;
+	    }
+
 	private:
 	    std::array<ArgumentType, asmjit::Globals::kMaxFuncArgs> _Args{};
 	    int _LargestSetArgIndex = -1;
 	    ReturnType _ReturnType{ ReturnType::Unknown };
 	};
-
-	namespace Internal {
-		    /** @brief Builds an @ref ABISignature from typed template parameters with public error propagation. */
-		    template<typename InReturnType, typename... InArgs>
-		    std::expected<ABISignature, FThunkError> BuildABISignature() noexcept {
-		        ABISignature Signature{};
-		        if (auto Error = Signature.template SetReturnSlot<InReturnType>()) {
-		            return std::unexpected(*Error);
-		        }
-
-		        std::optional<FThunkError> ArgumentError{};
-		        uint32_t ArgumentIndex = 0;
-		        const auto AllArgumentsSet = (... && [&] {
-		            if (auto Error = Signature.template SetArgumentSlot<InArgs>(ArgumentIndex++)) {
-		                ArgumentError = *Error;
-		                return false;
-		            }
-		            return true;
-		        }());
-
-		        if (!AllArgumentsSet) {
-		            return std::unexpected(*ArgumentError);
-		        }
-
-		        return Signature;
-		    }
-	}
 
 	/** @brief Internal helper that normalizes argument and return placement metadata for a function signature.
 	 *

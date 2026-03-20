@@ -47,7 +47,7 @@ namespace BindingThunk {
 	 */
 	template<typename InReturnType, typename... InArgs>
 	THUNK_API FThunkResult GenerateRestoreThunk(InReturnType(*CallTo)(InArgs...), EBindingThunkType BindingType, const bool bLogAssembly = false) {
-	    auto Signature = Internal::BuildABISignature<InReturnType, InArgs...>();
+	    auto Signature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
 	    if (!Signature) {
 	        return std::unexpected(Signature.error());
 	    }
