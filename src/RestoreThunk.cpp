@@ -2,8 +2,8 @@
  *  @brief Implements restore thunks that rebuild call state from argument or register captures.
  */
 
-#include "RestoreThunk.hpp"
-#include "Context.hpp"
+#include "BindingThunk/RestoreThunk.hpp"
+#include "BindingThunk/Context.hpp"
 
 namespace BindingThunk {
 	/** @brief Emits a restore thunk that rebuilds arguments from the thread-local register stack. */
@@ -28,18 +28,20 @@ namespace BindingThunk {
 
 	/** @copydoc Internal::GenerateRestoreThunk(void*, FuncSignature, EBindingThunkType, bool) */
 	FThunkResult Internal::GenerateRestoreThunk(void* CallTo, FuncSignature Signature, EBindingThunkType BindingType, const bool bLogAssembly) {
-	    switch (BindingType) {
-	        case EBindingThunkType::Default:
-	            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Default binding thunks do not require a restore thunk."));
-	        case EBindingThunkType::Argument:
-	            return GenerateRestoreThunkForArgumentContext(CallTo, Signature, false, bLogAssembly);
-	        case EBindingThunkType::Register:
-	            return GenerateRestoreThunkForRegisterContext(CallTo, Signature, bLogAssembly);
-	        case EBindingThunkType::ArgumentAndRegister:
-	            return GenerateRestoreThunkForArgumentContext(CallTo, Signature, true, bLogAssembly);
-	        default:
-	            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
+	    if (!IsValidBindingThunkType(BindingType)) {
+	        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
 	    }
+
+	    const auto bHasArgumentContext = HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Argument);
+	    const auto bHasRegisterContext = HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Register);
+	    if (!bHasArgumentContext && !bHasRegisterContext) {
+	        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Default binding thunks do not require a restore thunk."));
+	    }
+	    if (bHasArgumentContext) {
+	        return GenerateRestoreThunkForArgumentContext(CallTo, Signature, bHasRegisterContext, bLogAssembly);
+	    }
+
+	    return GenerateRestoreThunkForRegisterContext(CallTo, Signature, bLogAssembly);
 	}
 
 	/** @brief Emits a restore thunk for @ref EBindingThunkType::Register. */
@@ -165,7 +167,7 @@ namespace BindingThunk {
 	#endif
 	}
 
-	/** @brief Emits a restore thunk for @ref EBindingThunkType::Argument and @ref EBindingThunkType::ArgumentAndRegister. */
+	/** @brief Emits a restore thunk for binding types that use @ref ArgumentContext. */
 	FThunkResult GenerateRestoreThunkForArgumentContext(void* CallTo, FuncSignature DestinationSignature, bool bSafe, const bool bLogAssembly) {
 	    using namespace asmjit;
 	    using namespace asmjit::x86;

@@ -2,8 +2,8 @@
  *  @brief Implements binding thunk generation for default, register, and argument-based modes.
  */
 
-#include "BindingThunk.hpp"
-#include "Context.hpp"
+#include "BindingThunk/BindingThunk.hpp"
+#include "BindingThunk/Context.hpp"
 #include <vector>
 
 namespace BindingThunk {
@@ -42,6 +42,7 @@ namespace BindingThunk {
 	THUNK_API FThunkResult GenerateSimpleShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 	static FThunkResult GenerateComplexShift(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
 	THUNK_API FThunkResult GenerateShiftWithRegisterContext(void *ToFn, void *BindParam, FuncArgInfo& Src, FuncArgInfo& Dest, bool bLogAssembly);
+	static FThunkResult GenerateBindingThunkForArgumentContext(void* ToFn, void* BindParam, FuncSignature SourceSignature, bool bCaptureRegisterContext, bool bLogAssembly);
 
 	/** @copydoc GenerateBindingThunk(void*, void*, const ABISignature&, EBindingThunkType, bool) */
 	FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, const ABISignature& SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
@@ -55,24 +56,26 @@ namespace BindingThunk {
 
 	/** @copydoc Internal::GenerateBindingThunk(void*, void*, FuncSignature, EBindingThunkType, bool) */
 	FThunkResult Internal::GenerateBindingThunk(void *ToFn, void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+	    if (!IsValidBindingThunkType(Type)) {
+	        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
+	    }
+
+	    const auto bHasArgumentContext = HasBindingThunkTypeFlag(Type, EBindingThunkType::Argument);
+	    const auto bHasRegisterContext = HasBindingThunkTypeFlag(Type, EBindingThunkType::Register);
+	    if (bHasArgumentContext) {
+	        return GenerateBindingThunkForArgumentContext(ToFn, BindParam, SourceSignature, bHasRegisterContext, bLogAssembly);
+	    }
+
 	    auto InvokeSignature = ShiftSignature(SourceSignature);
 	    FuncArgInfo SrcSig{SourceSignature};
 	    FuncArgInfo DestSig{InvokeSignature};
-	    switch (Type) {
-	        case EBindingThunkType::Default: {
-	            auto StackAllocSize = DestSig.Detail().arg_stack_size() - DestSig.Detail().red_zone_size() - DestSig.Detail().spill_zone_size();
-	            return StackAllocSize > 0 ? GenerateComplexShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly) : GenerateSimpleShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
-	        }
-	        case EBindingThunkType::Register: {
-	            return GenerateShiftWithRegisterContext(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
-	        }
-	        case EBindingThunkType::Argument:
-	        case EBindingThunkType::ArgumentAndRegister:
-	            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Argument binding thunks require a callback that takes ArgumentContext&."));
-	        default: {
-	            return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "Invalid binding thunk type."));
-	        }
+
+	    if (bHasRegisterContext) {
+	        return GenerateShiftWithRegisterContext(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
 	    }
+
+	    auto StackAllocSize = DestSig.Detail().arg_stack_size() - DestSig.Detail().red_zone_size() - DestSig.Detail().spill_zone_size();
+	    return StackAllocSize > 0 ? GenerateComplexShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly) : GenerateSimpleShift(ToFn, BindParam, SrcSig, DestSig, bLogAssembly);
 	}
 
 	/** @brief Emits a minimal thunk that only shifts register arguments and jumps to the destination. */
@@ -310,18 +313,8 @@ namespace BindingThunk {
 	#endif
 	}
 
-	/** @copydoc GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, const ABISignature&, EBindingThunkType, bool) */
-	FThunkResult GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void* BindParam, const ABISignature& SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
-	    auto FinalizedSignature = SourceSignature.Finalize();
-	    if (!FinalizedSignature) {
-	        return std::unexpected(FinalizedSignature.error());
-	    }
-
-	    return Internal::GenerateBindingThunk(ToFn, BindParam, FinalizedSignature.value(), Type, bLogAssembly);
-	}
-
-	/** @copydoc Internal::GenerateBindingThunk(void(*)(void*, ArgumentContext&), void*, FuncSignature, EBindingThunkType, bool) */
-	FThunkResult Internal::GenerateBindingThunk(void(*ToFn)(void*, ArgumentContext&), void *BindParam, FuncSignature SourceSignature, EBindingThunkType Type, const bool bLogAssembly) {
+	/** @brief Emits a binding thunk that forwards unbound arguments through @ref ArgumentContext. */
+	FThunkResult GenerateBindingThunkForArgumentContext(void* ToFn, void *BindParam, FuncSignature SourceSignature, const bool bCaptureRegisterContext, const bool bLogAssembly) {
 	    using namespace asmjit;
 	    using namespace asmjit::x86;
 
@@ -337,12 +330,8 @@ namespace BindingThunk {
 	    auto SrcInfo = FuncArgInfo{SourceSignature};
 
 	    const auto ShadowArgSpace = DestInfo.Detail().arg_stack_size();
-	    if (Type != EBindingThunkType::Argument && Type != EBindingThunkType::ArgumentAndRegister) {
-	        return std::unexpected(MakeThunkError(EThunkErrorCode::InvalidBindingType, "ArgumentContext binding callbacks require Argument or ArgumentAndRegister binding types."));
-	    }
-
 	    auto CtxSpace = ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size());
-	    if (Type == EBindingThunkType::ArgumentAndRegister) CtxSpace += sizeof(RegisterContext);
+	    if (bCaptureRegisterContext) CtxSpace += sizeof(RegisterContext);
 	#if defined(_WIN64)
 	    TheAssembler.bind(BeginLabel);
 	#endif
@@ -355,8 +344,8 @@ namespace BindingThunk {
 	    const auto RegContextPtr = ArgContextPtr.clone_adjusted(ArgumentContext::ArgumentContextNonVariableSize + (ArgumentContext::ArgumentSize * SrcInfo.GetArguments().size()));
 	    const auto RspInitial = ptr(rsp, static_cast<int32_t>(FrameState.EntryRspOffset()));
 
-	    // In ArgumentAndRegister mode the register capture lives immediately after the packed argument array.
-	    if (Type == EBindingThunkType::ArgumentAndRegister) {
+	    // When register capture is enabled, it lives immediately after the packed argument array.
+	    if (bCaptureRegisterContext) {
 	        SaveRegisterContext(TheAssembler, RegContextPtr, GpScratchReg);
 	    }
 
@@ -395,7 +384,7 @@ namespace BindingThunk {
 
 	    // The callback uses these flags to decide whether it may read a return slot or appended register data.
 	    auto Flag = (SrcInfo.GetReturnValues().empty() ? 0 : ArgumentContext::HasReturnValueFlag) |
-	        (Type == EBindingThunkType::ArgumentAndRegister ? ArgumentContext::HasRegisterContextFlag : 0);
+	        (bCaptureRegisterContext ? ArgumentContext::HasRegisterContextFlag : 0);
 	    StoreImmediateU64(TheAssembler, ArgContextPtr.clone_adjusted(ArgumentContext::FlagsOffset), Flag, GpScratchReg);
 
 	    // call function

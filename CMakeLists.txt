@@ -25,12 +25,12 @@ set(ASMJIT_STATIC TRUE)
 FetchContent_MakeAvailable(asmjit)
 
 set(THUNK_PUBLIC_HEADERS
-    include/BindingThunk.hpp
-    include/Common.hpp
-    include/Context.hpp
-    include/Hashes.hpp
-    include/RestoreThunk.hpp
-    include/Types.hpp
+    include/BindingThunk/BindingThunk.hpp
+    include/BindingThunk/Common.hpp
+    include/BindingThunk/Context.hpp
+    include/BindingThunk/Hashes.hpp
+    include/BindingThunk/RestoreThunk.hpp
+    include/BindingThunk/Types.hpp
 )
 
 set(THUNK_SOURCES
@@ -128,7 +128,7 @@ if (THUNK_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
 
     add_executable(BindingThunkTests
-        include/Tests.hpp
+        include/BindingThunk/Tests.hpp
         src/Tests.cpp
     )
     target_link_libraries(BindingThunkTests PRIVATE BindingThunk::BindingThunk GTest::gtest)

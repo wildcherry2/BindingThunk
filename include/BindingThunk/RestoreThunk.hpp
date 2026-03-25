@@ -3,8 +3,8 @@
  */
 
 #pragma once
-#include "Common.hpp"
-#include "BindingThunk.hpp"
+#include "BindingThunk/Common.hpp"
+#include "BindingThunk/BindingThunk.hpp"
 
 namespace BindingThunk {
 	namespace Internal {

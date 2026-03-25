@@ -14,7 +14,8 @@
 #include <optional>
 #include <cstddef>
 #include <functional>
-#include "Types.hpp"
+#include <utility>
+#include "BindingThunk/Types.hpp"
 
 namespace BindingThunk {
 	#if defined(_WIN32)
@@ -59,13 +60,48 @@ namespace BindingThunk {
 	using LogFn = std::function<void(std::wstring_view)>;
 
 	/** @brief Selects how a binding thunk captures and restores call state. */
-	enum class EBindingThunkType
+	enum class EBindingThunkType : uint8_t
 	{
-	    Default, ///< Generates a direct binding thunk that only injects the bound parameter.
-	    Argument, ///< Packs unbound arguments into an @ref ArgumentContext for callback-style dispatch.
-	    Register, ///< Captures non-argument registers in a side-channel @ref RegisterContextStack for a matching restore thunk.
-	    ArgumentAndRegister, ///< Combines @ref Argument and @ref Register behavior in a single thunk pair.
+	    Default = 0, ///< Generates a direct binding thunk that only injects the bound parameter.
+	    Argument = 1 << 0, ///< Packs unbound arguments into an @ref ArgumentContext for callback-style dispatch.
+	    Register = 1 << 1, ///< Captures non-argument registers in a side-channel @ref RegisterContextStack for a matching restore thunk.
 	};
+
+	/** @brief Bitwise OR for @ref EBindingThunkType flags. */
+	inline constexpr auto operator|(const EBindingThunkType Left, const EBindingThunkType Right) noexcept -> EBindingThunkType {
+	    return static_cast<EBindingThunkType>(std::to_underlying(Left) | std::to_underlying(Right));
+	}
+
+	/** @brief Bitwise AND for @ref EBindingThunkType flags. */
+	inline constexpr auto operator&(const EBindingThunkType Left, const EBindingThunkType Right) noexcept -> EBindingThunkType {
+	    return static_cast<EBindingThunkType>(std::to_underlying(Left) & std::to_underlying(Right));
+	}
+
+	/** @brief Bitwise NOT for @ref EBindingThunkType flags. */
+	inline constexpr auto operator~(const EBindingThunkType Value) noexcept -> EBindingThunkType {
+	    return static_cast<EBindingThunkType>(~std::to_underlying(Value));
+	}
+
+	/** @brief Bitwise OR-assignment for @ref EBindingThunkType flags. */
+	inline constexpr auto operator|=(EBindingThunkType& Left, const EBindingThunkType Right) noexcept -> EBindingThunkType& {
+	    Left = Left | Right;
+	    return Left;
+	}
+
+	/** @brief Returns the known non-default binding-thunk flags. */
+	inline constexpr auto GetKnownBindingThunkTypeFlags() noexcept -> EBindingThunkType {
+	    return EBindingThunkType::Argument | EBindingThunkType::Register;
+	}
+
+	/** @brief Returns whether @p Value contains @p Flag. */
+	inline constexpr auto HasBindingThunkTypeFlag(const EBindingThunkType Value, const EBindingThunkType Flag) noexcept -> bool {
+	    return (Value & Flag) == Flag;
+	}
+
+	/** @brief Returns whether @p Value contains only flags known to the library. */
+	inline constexpr auto IsValidBindingThunkType(const EBindingThunkType Value) noexcept -> bool {
+	    return (std::to_underlying(Value) & ~std::to_underlying(GetKnownBindingThunkTypeFlags())) == 0;
+	}
 
 	/** @brief Enumerates failure modes reported while generating or executing thunks. */
 	enum class EThunkErrorCode {

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "BindingThunk.hpp"
-#include "RestoreThunk.hpp"
+#include "BindingThunk/BindingThunk.hpp"
+#include "BindingThunk/RestoreThunk.hpp"
 
 namespace BindingThunk {
 	/** @brief Reinterprets a thunk pointer as a callable function pointer for tests.

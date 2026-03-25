@@ -1,4 +1,4 @@
-#include "Tests.hpp"
+#include "BindingThunk/Tests.hpp"
 
 #include <gtest/gtest.h>
 
@@ -68,6 +68,15 @@ static_assert(!Detail::ReturnedByValue<FByteValue3>);
 static_assert(!Detail::ReturnedByValue<FByteValue5>);
 static_assert(!Detail::ReturnedByValue<FByteValue6>);
 static_assert(!Detail::ReturnedByValue<FByteValue7>);
+static_assert(!IsValidBindingThunkType(static_cast<EBindingThunkType>(99)));
+static_assert(HasBindingThunkTypeFlag(EBindingThunkType::Argument | EBindingThunkType::Register, EBindingThunkType::Argument));
+static_assert(HasBindingThunkTypeFlag(EBindingThunkType::Argument | EBindingThunkType::Register, EBindingThunkType::Register));
+static_assert(Detail::ContainsArgumentContextV<ArgumentContext&>);
+static_assert(Detail::ContainsArgumentContextV<const ArgumentContext&>);
+static_assert(!Detail::ContainsArgumentContextV<int, double, void*>);
+static_assert(Detail::IsValidArgumentContextSignatureV<void, ArgumentContext&>);
+static_assert(!Detail::IsValidArgumentContextSignatureV<int, ArgumentContext&>);
+static_assert(!Detail::IsValidArgumentContextSignatureV<void, int, ArgumentContext&>);
 
 static void ThrowingRegisterContextStackFatalHandler(const char* Message) {
     GRegisterContextStackFatalMessage = Message;
@@ -366,12 +375,14 @@ static int64_t OriginalArgumentNoArgs() {
     return 123;
 }
 
-static void ArgumentNoArgCallback(ArgumentNoArgBinder* Binder, ArgumentContext& Context) {
+static int64_t ArgumentNoArgCallback(ArgumentNoArgBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
     Binder->hasRegisterContext = Context.HasRegisterContext();
     Binder->hasReturnValue = Context.HasReturnValue();
     Binder->argsCount = Context.GetArgumentsCount();
-    Context.SetReturnValue(ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context));
+    const auto ReturnValue = ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context);
+    Context.SetReturnValue(ReturnValue);
+    return ReturnValue;
 }
 
 struct ArgumentSmallBinder {
@@ -400,7 +411,7 @@ static int64_t OriginalArgumentSmall(int Value, int& ReferenceValue, int* Pointe
     return Value + ReferenceValue + *PointerValue;
 }
 
-static void ArgumentSmallCallback(ArgumentSmallBinder* Binder, ArgumentContext& Context) {
+static int64_t ArgumentSmallCallback(ArgumentSmallBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
     Binder->hasRegisterContext = Context.HasRegisterContext();
     Binder->hasReturnValue = Context.HasReturnValue();
@@ -408,7 +419,9 @@ static void ArgumentSmallCallback(ArgumentSmallBinder* Binder, ArgumentContext& 
     Binder->value = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
     Binder->referenced = *GetArgumentValueOrFail<int*>(Context, 1);
     Binder->pointed = *GetArgumentValueOrFail<int*>(Context, 2);
-    Context.SetReturnValue(ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context));
+    const auto ReturnValue = ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context);
+    Context.SetReturnValue(ReturnValue);
+    return ReturnValue;
 }
 
 struct ArgumentRegisterLargeBinder {
@@ -445,7 +458,7 @@ static int* OriginalArgumentRegisterLarge(int Value, int& ReferenceValue, int* P
     return PointerValue;
 }
 
-static void ArgumentRegisterLargeCallback(ArgumentRegisterLargeBinder* Binder, ArgumentContext& Context) {
+static int* ArgumentRegisterLargeCallback(ArgumentRegisterLargeBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
     Binder->hasRegisterContext = Context.HasRegisterContext();
     Binder->hasReturnValue = Context.HasReturnValue();
@@ -456,7 +469,9 @@ static void ArgumentRegisterLargeCallback(ArgumentRegisterLargeBinder* Binder, A
     Binder->floatingValue = GetArgumentValueOrFail<double>(Context, 3);
     Binder->floatingReferenced = *GetArgumentValueOrFail<double*>(Context, 4);
     Binder->floatingPointed = *GetArgumentValueOrFail<double*>(Context, 5);
-    Context.SetReturnValue(ThunkCast<int*(*)(ArgumentContext&)>(GRestoreThunk)(Context));
+    auto* ReturnValue = ThunkCast<int*(*)(ArgumentContext&)>(GRestoreThunk)(Context);
+    Context.SetReturnValue(ReturnValue);
+    return ReturnValue;
 }
 
 struct ArgumentFloatStackBinder {
@@ -483,7 +498,7 @@ static float OriginalArgumentFloatStack(int A, int B, int C, int D, float E) {
     return static_cast<float>(A + B + C + D) + E;
 }
 
-static void ArgumentFloatStackCallback(ArgumentFloatStackBinder* Binder, ArgumentContext& Context) {
+static float ArgumentFloatStackCallback(ArgumentFloatStackBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
     Binder->a = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
     Binder->b = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 1));
@@ -493,20 +508,71 @@ static void ArgumentFloatStackCallback(ArgumentFloatStackBinder* Binder, Argumen
 
     const auto ReturnValue = ThunkCast<float(*)(ArgumentContext&)>(GRestoreThunk)(Context);
     Context.SetReturnValue(static_cast<uint64_t>(std::bit_cast<uint32_t>(ReturnValue)));
+    return ReturnValue;
 }
 
 static void UnsupportedArgumentCallback(void*, ArgumentContext&) {}
 
+struct TypedArgumentContextBinder {
+    int calls{};
+    bool hasRegisterContext{};
+    uint64_t argsCount{};
+    ArgumentContext* forwarded{};
+};
+
+static void TypedArgumentContextCallback(TypedArgumentContextBinder* Binder, ArgumentContext& Context) {
+    ++Binder->calls;
+    Binder->hasRegisterContext = Context.HasRegisterContext();
+    Binder->argsCount = Context.GetArgumentsCount();
+    Binder->forwarded = GetArgumentValueOrFail<ArgumentContext*>(Context, 0);
+}
+
 TEST(BindingThunkTests, DefaultNoArgsScalarReturn) {
     DefaultNoArgBinder Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultNoArgCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultNoArgCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
     auto BoundFn = ThunkCast<int(*)()>(BindThunk);
     EXPECT_EQ(BoundFn(), 41);
     EXPECT_EQ(Binder.calls, 1);
+}
+
+TEST(BindingThunkTests, TypedArgumentContextCallbackAutoEnablesArgumentMode) {
+    TypedArgumentContextBinder Binder{};
+
+    auto BindThunkResult = GenerateBindingThunk(&TypedArgumentContextCallback, &Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<void(*)(ArgumentContext&)>(BindThunk);
+    auto Storage = MakeArgumentContextStorage(0);
+    auto& InputContext = GetArgumentContext(Storage);
+    BoundFn(InputContext);
+
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_FALSE(Binder.hasRegisterContext);
+    EXPECT_EQ(Binder.argsCount, 1);
+    EXPECT_EQ(Binder.forwarded, &InputContext);
+}
+
+TEST(BindingThunkTests, TypedArgumentContextCallbackPreservesRegisterMode) {
+    TypedArgumentContextBinder Binder{};
+
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&TypedArgumentContextCallback, &Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<void(*)(ArgumentContext&)>(BindThunk);
+    auto Storage = MakeArgumentContextStorage(0);
+    auto& InputContext = GetArgumentContext(Storage);
+    BoundFn(InputContext);
+
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_TRUE(Binder.hasRegisterContext);
+    EXPECT_EQ(Binder.argsCount, 1);
+    EXPECT_EQ(Binder.forwarded, &InputContext);
 }
 
 TEST(ContextTests, GetArgumentAsReadsRawBits) {
@@ -798,7 +864,7 @@ TEST(BindingThunkTests, DefaultSmallMixedArgumentsAndPointerReturn) {
     int ReferenceValue = 5;
     int PointedValue = 7;
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultSmallCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultSmallCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -817,7 +883,7 @@ TEST(BindingThunkTests, DefaultSmallMixedArgumentsAndPointerReturn) {
 TEST(BindingThunkTests, DefaultSimpleShiftUsesXmmRegisters) {
     DefaultSimpleXmmBinder Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultSimpleXmmCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultSimpleXmmCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -858,7 +924,7 @@ TEST(BindingThunkTests, DefaultComplexShiftHandlesStackArgumentsAndFloatReturn) 
     int PointedValue = 3;
     void* PointerValue = reinterpret_cast<void*>(5);
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -879,7 +945,7 @@ TEST(BindingThunkTests, DefaultComplexShiftHandlesStackArgumentsAndFloatReturn) 
 TEST(BindingThunkTests, DefaultComplexShiftHandlesFloatArgumentsAndIntegerReturn) {
     DefaultComplexFloatIntBinder Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexFloatIntCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexFloatIntCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -898,7 +964,7 @@ TEST(BindingThunkTests, DefaultComplexShiftHandlesFloatArgumentsAndIntegerReturn
 TEST(BindingThunkTests, DefaultComplexShiftHandlesVoidReturn) {
     DefaultComplexVoidBinder Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexVoidCallback, &Binder, EBindingThunkType::Default);
+    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexVoidCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -924,7 +990,7 @@ TEST(BindingThunkTests, RegisterBindingRestoresLargeMixedSignature) {
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalRegisterLarge, EBindingThunkType::Register);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk(&RegisterLargeCallback, &State, EBindingThunkType::Register);
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&RegisterLargeCallback, &State);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -957,7 +1023,7 @@ TEST(BindingThunkTests, RegisterBindingMovesGpRegisterArgumentsToStackAndReturns
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalRegisterStackShift, EBindingThunkType::Register);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk(&RegisterStackShiftCallback, &State, EBindingThunkType::Register);
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&RegisterStackShiftCallback, &State);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -983,7 +1049,7 @@ TEST(BindingThunkTests, RegisterBindingHandlesMultipleXmmArgumentsAndFloatReturn
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalRegisterXmm, EBindingThunkType::Register);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk(&RegisterXmmCallback, &State, EBindingThunkType::Register);
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&RegisterXmmCallback, &State);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -1002,11 +1068,13 @@ TEST(BindingThunkTests, RegisterBindingHandlesMultipleXmmArgumentsAndFloatReturn
 
 TEST(BindingThunkTests, ArgumentBindingNoArgsExposesContextMetadata) {
     ArgumentNoArgBinder Binder{};
+    auto BindSignature = ABISignature::BuildABISignature<int64_t>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
 
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentNoArgs, EBindingThunkType::Argument);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Argument);
+    auto BindThunkResult = GenerateBindingThunk(reinterpret_cast<void*>(&ArgumentNoArgCallback), &Binder, BindSignature.value(), EBindingThunkType::Argument);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -1025,12 +1093,14 @@ TEST(BindingThunkTests, ArgumentBindingRestoresSmallMixedSignature) {
     GArgumentSmallBinder = &Binder;
     int ReferenceValue = 5;
     int PointedValue = 7;
+    auto BindSignature = ABISignature::BuildABISignature<int64_t, int, int&, int*>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
 
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentSmall, EBindingThunkType::Argument);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk<ArgumentSmallBinder, int64_t, int, int&, int*>(
-        &ArgumentSmallCallback, &Binder, EBindingThunkType::Argument);
+    auto BindThunkResult = GenerateBindingThunk(
+        reinterpret_cast<void*>(&ArgumentSmallCallback), &Binder, BindSignature.value(), EBindingThunkType::Argument);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -1083,12 +1153,14 @@ TEST(BindingThunkTests, ArgumentRestoreThunkWritesIntegerReturnValueIntoContext)
 TEST(BindingThunkTests, ArgumentBindingRestoresStackFloatArgumentAndFloatReturn) {
     ArgumentFloatStackBinder Binder{};
     GArgumentFloatStackBinder = &Binder;
+    auto BindSignature = ABISignature::BuildABISignature<float, int, int, int, int, float>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
 
     auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentFloatStack, EBindingThunkType::Argument);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk<ArgumentFloatStackBinder, float, int, int, int, int, float>(
-        &ArgumentFloatStackCallback, &Binder, EBindingThunkType::Argument);
+    auto BindThunkResult = GenerateBindingThunk(
+        reinterpret_cast<void*>(&ArgumentFloatStackCallback), &Binder, BindSignature.value(), EBindingThunkType::Argument);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -1140,12 +1212,14 @@ TEST(BindingThunkTests, ArgumentAndRegisterBindingRestoresLargeMixedSignature) {
     int PointedValue = 11;
     double FloatingReference = 2.5;
     double FloatingPointed = 3.5;
+    auto BindSignature = ABISignature::BuildABISignature<int*, int, int&, int*, double, double&, double*>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
 
-    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentRegisterLarge, EBindingThunkType::ArgumentAndRegister);
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentRegisterLarge, EBindingThunkType::Argument | EBindingThunkType::Register);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
     GRestoreThunk = std::move(RestoreThunkResult.value());
-    auto BindThunkResult = GenerateBindingThunk<ArgumentRegisterLargeBinder, int*, int, int&, int*, double, double&, double*>(
-        &ArgumentRegisterLargeCallback, &Binder, EBindingThunkType::ArgumentAndRegister);
+    auto BindThunkResult = GenerateBindingThunk(
+        reinterpret_cast<void*>(&ArgumentRegisterLargeCallback), &Binder, BindSignature.value(), EBindingThunkType::Argument | EBindingThunkType::Register);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
@@ -1173,42 +1247,11 @@ TEST(BindingThunkTests, ArgumentAndRegisterBindingRestoresLargeMixedSignature) {
     GArgumentRegisterLargeBinder = nullptr;
 }
 
-TEST(BindingThunkTests, PlainCallbacksRejectArgumentModes) {
-    DefaultNoArgBinder Binder{};
+TEST(BindingThunkTests, RawBindingThunkRejectsInvalidBindingMode) {
+    auto Signature = ABISignature::BuildABISignature<int>();
+    ASSERT_TRUE(Signature.has_value()) << Signature.error().Message;
 
-    auto ArgumentResult = GenerateBindingThunk(&DefaultNoArgCallback, &Binder, EBindingThunkType::Argument);
-    EXPECT_FALSE(ArgumentResult.has_value());
-    EXPECT_EQ(ArgumentResult.error().Code, EThunkErrorCode::InvalidBindingType);
-
-    auto ArgumentAndRegisterResult = GenerateBindingThunk(&DefaultNoArgCallback, &Binder, EBindingThunkType::ArgumentAndRegister);
-    EXPECT_FALSE(ArgumentAndRegisterResult.has_value());
-    EXPECT_EQ(ArgumentAndRegisterResult.error().Code, EThunkErrorCode::InvalidBindingType);
-}
-
-TEST(BindingThunkTests, PlainCallbacksRejectInvalidBindingMode) {
-    DefaultNoArgBinder Binder{};
-
-    auto Result = GenerateBindingThunk(&DefaultNoArgCallback, &Binder, static_cast<EBindingThunkType>(99));
-    ASSERT_FALSE(Result.has_value());
-    EXPECT_EQ(Result.error().Code, EThunkErrorCode::InvalidBindingType);
-}
-
-TEST(BindingThunkTests, ArgumentCallbacksRejectNonArgumentModes) {
-    ArgumentNoArgBinder Binder{};
-
-    auto DefaultResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Default);
-    EXPECT_FALSE(DefaultResult.has_value());
-    EXPECT_EQ(DefaultResult.error().Code, EThunkErrorCode::InvalidBindingType);
-
-    auto RegisterResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Register);
-    EXPECT_FALSE(RegisterResult.has_value());
-    EXPECT_EQ(RegisterResult.error().Code, EThunkErrorCode::InvalidBindingType);
-}
-
-TEST(BindingThunkTests, ArgumentCallbacksRejectInvalidBindingMode) {
-    ArgumentNoArgBinder Binder{};
-
-    auto Result = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, static_cast<EBindingThunkType>(99));
+    auto Result = GenerateBindingThunk(reinterpret_cast<void*>(&DefaultNoArgCallback), nullptr, Signature.value(), static_cast<EBindingThunkType>(99));
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::InvalidBindingType);
 }
@@ -1234,7 +1277,7 @@ TEST(BindingThunkTests, RegisterRestoreThunkRegistersWindowsUnwindInfo) {
 
 TEST(BindingThunkTests, RegisterBindingThunkRegistersWindowsUnwindInfo) {
     RegisterStackShiftState Binder{};
-    auto BindThunkResult = GenerateBindingThunk(&RegisterStackShiftCallback, &Binder, EBindingThunkType::Register);
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&RegisterStackShiftCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
 
     auto BindThunk = std::move(BindThunkResult.value());
@@ -1247,7 +1290,9 @@ TEST(BindingThunkTests, RegisterBindingThunkRegistersWindowsUnwindInfo) {
 
 TEST(BindingThunkTests, ArgumentBindingThunkRegistersWindowsUnwindInfo) {
     ArgumentNoArgBinder Binder{};
-    auto BindThunkResult = GenerateBindingThunk<ArgumentNoArgBinder, int64_t>(&ArgumentNoArgCallback, &Binder, EBindingThunkType::Argument);
+    auto BindSignature = ABISignature::BuildABISignature<int64_t>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
+    auto BindThunkResult = GenerateBindingThunk(reinterpret_cast<void*>(&ArgumentNoArgCallback), &Binder, BindSignature.value(), EBindingThunkType::Argument);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
 
     auto BindThunk = std::move(BindThunkResult.value());
@@ -1260,10 +1305,13 @@ TEST(BindingThunkTests, ArgumentBindingThunkRegistersWindowsUnwindInfo) {
 
 TEST(BindingThunkTests, ArgumentAndRegisterBindingThunkRegistersWindowsUnwindInfo) {
     ArgumentRegisterLargeBinder Binder{};
-    auto BindThunkResult = GenerateBindingThunk<ArgumentRegisterLargeBinder, int*, int, int&, int*, double, double&, double*>(
-        &ArgumentRegisterLargeCallback,
+    auto BindSignature = ABISignature::BuildABISignature<int*, int, int&, int*, double, double&, double*>();
+    ASSERT_TRUE(BindSignature.has_value()) << BindSignature.error().Message;
+    auto BindThunkResult = GenerateBindingThunk(
+        reinterpret_cast<void*>(&ArgumentRegisterLargeCallback),
         &Binder,
-        EBindingThunkType::ArgumentAndRegister
+        BindSignature.value(),
+        EBindingThunkType::Argument | EBindingThunkType::Register
     );
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
 
@@ -1277,11 +1325,7 @@ TEST(BindingThunkTests, ArgumentAndRegisterBindingThunkRegistersWindowsUnwindInf
 
 TEST(BindingThunkTests, ComplexBindingThunkRegistersWindowsUnwindInfo) {
     DefaultComplexBinder Binder{};
-    auto BindThunkResult = GenerateBindingThunk<DefaultComplexBinder, float, int, int&, int*, intptr_t, void*>(
-        &DefaultComplexCallback,
-        &Binder,
-        EBindingThunkType::Default
-    );
+    auto BindThunkResult = GenerateBindingThunk(&DefaultComplexCallback, &Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
 
     auto BindThunk = std::move(BindThunkResult.value());
@@ -1305,7 +1349,7 @@ TEST(BindingThunkTests, ArgumentRestoreThunkRegistersWindowsUnwindInfo) {
 }
 
 TEST(BindingThunkTests, ArgumentAndRegisterRestoreThunkRegistersWindowsUnwindInfo) {
-    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentRegisterLarge, EBindingThunkType::ArgumentAndRegister);
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalArgumentRegisterLarge, EBindingThunkType::Argument | EBindingThunkType::Register);
     ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
 
     auto RestoreThunk = std::move(RestoreThunkResult.value());
@@ -1376,7 +1420,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedRegisterArgumentTypes) 
     auto Signature = FuncSignature::build<int>();
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(reinterpret_cast<void*>(&UnsupportedArgumentCallback), nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1389,7 +1433,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedStackArgumentTypes) {
     Signature.add_arg(asmjit::TypeId::kInt32);
     Signature.add_arg(asmjit::TypeId::kMmx64);
 
-    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(reinterpret_cast<void*>(&UnsupportedArgumentCallback), nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }
@@ -1398,7 +1442,7 @@ TEST(BindingThunkTests, ArgumentBindingRejectsUnsupportedReturnTypes) {
     auto Signature = FuncSignature::build<void>();
     Signature.set_ret(asmjit::TypeId::kMask32);
 
-    auto Result = Internal::GenerateBindingThunk(&UnsupportedArgumentCallback, nullptr, Signature, EBindingThunkType::Argument);
+    auto Result = Internal::GenerateBindingThunk(reinterpret_cast<void*>(&UnsupportedArgumentCallback), nullptr, Signature, EBindingThunkType::Argument);
     ASSERT_FALSE(Result.has_value());
     EXPECT_EQ(Result.error().Code, EThunkErrorCode::UnsupportedType);
 }

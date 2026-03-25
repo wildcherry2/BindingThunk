@@ -8,7 +8,21 @@
 #include <cstddef>
 
 namespace BindingThunk {
+	class ArgumentContext;
+
 	namespace Detail {
+	    template<typename T>
+	    inline constexpr bool IsArgumentContextTypeV = std::same_as<std::remove_cvref_t<T>, ArgumentContext>;
+
+	    template<typename... Ts>
+	    inline constexpr bool ContainsArgumentContextV = (false || ... || IsArgumentContextTypeV<Ts>);
+
+	    template<typename ReturnType, typename... Args>
+	    inline constexpr bool IsValidArgumentContextSignatureV = false;
+
+	    template<typename ReturnType>
+	    inline constexpr bool IsValidArgumentContextSignatureV<ReturnType, ArgumentContext&> = std::is_void_v<ReturnType>;
+
 	    /** @brief True when @p T is a scalar or reference type accepted by the thunk helpers. */
 	    template<typename T>
 	    concept ScalarOrReference = std::is_scalar_v<T> || std::is_reference_v<T>;

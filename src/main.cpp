@@ -7,8 +7,8 @@
 #include <format>
 #include <stacktrace>
 
-#include "BindingThunk.hpp"
-#include "RestoreThunk.hpp"
+#include "BindingThunk/BindingThunk.hpp"
+#include "BindingThunk/RestoreThunk.hpp"
 
 using namespace BindingThunk;
 
@@ -35,7 +35,7 @@ static double testcomplexfnoriginal(double p0, int p1, float p2, float p3, int64
 /** @brief Runs the example binding/restore-thunk flow. */
 int main() {
     void* binder = (void*)0x42;
-    auto bindResult = GenerateBindingThunk(testcomplexfn, binder, EBindingThunkType::Register);
+    auto bindResult = GenerateBindingThunk<EBindingThunkType::Register>(testcomplexfn, binder);
     if (!bindResult) {
         std::wcerr << bindResult.error().Message << std::endl;
         return 1;

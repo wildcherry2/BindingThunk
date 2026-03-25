@@ -9,8 +9,8 @@
 #include <type_traits>
 #include <asmjit/x86.h>
 #include <unordered_map>
-#include "Common.hpp"
-#include "Hashes.hpp"
+#include "BindingThunk/Common.hpp"
+#include "BindingThunk/Hashes.hpp"
 
 namespace BindingThunk {
 	/** @brief Captured register state for register-based thunk modes. */
