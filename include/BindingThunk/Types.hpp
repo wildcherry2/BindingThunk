@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <type_traits>
 #include <cstddef>
+#include <tuple>
 
 namespace BindingThunk {
 	class ArgumentContext;
@@ -109,7 +110,31 @@ namespace BindingThunk {
 	        static_assert(!std::is_same_v<Type, AlwaysFalse<T>>, "AsmJit-based template signature deduction is only supported on Windows. Build ABISignature manually on this platform.");
 	    };
 	#endif
+	}
+
+	/** @brief True when @p T is a member function type. */
+	template<typename T>
+	concept MemberFunction = std::is_member_function_pointer_v<T>;
+
+	/** @brief True when @p MF value is a member function type. */
+	template<auto MF>
+	concept MemberFunctionValue = std::is_member_function_pointer_v<decltype(MF)>;
+
+	template<MemberFunction T>
+	struct MemberFunctionHelper;
+
+	/** @brief Helper that gives member function traits and a StaticInvoker that's templated to a member function value. */
+	template<typename C, typename R, typename... As>
+	struct MemberFunctionHelper<R(C::*)(As...)> {
+		using ReturnType = R;
+		using ClassType = C;
+		using MemberFunctionType = R (C::*)(As...);
+
+		template<auto MFunction> requires (MemberFunctionValue<MFunction> && std::same_as<decltype(MFunction), MemberFunctionType>)
+		static ReturnType StaticInvoker(ClassType* this_, As... args) {
+			return (this_->*MFunction)(args...);
 		}
+	};
 
 	#if defined(_WIN32)
 	/** @brief Maps a C++ argument type to the form expected by AsmJit signature generation and the ABI. */

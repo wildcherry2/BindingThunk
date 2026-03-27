@@ -64,4 +64,18 @@ namespace BindingThunk {
 	        bLogAssembly
 	    );
 	}
+
+	/** @brief Typed wrapper for safely binding member functions.
+	 * @tparam MemberFunction The value of the member function to bind to. Can be virtual.
+	 * @tparam BindingType Compile-time binding mode flags.
+	 * @tparam Traits Helper struct type to deduce a static invoker and 'this' type from @ref MemberFunction.
+	 * @param This The 'this' pointer to bind to the member function.
+	 * @param bLogAssembly When true, emits generated assembly through the configured logger.
+	 * @return Owning thunk pointer on success, or a detailed error on failure.
+	 */
+	template<auto MemberFunction, EBindingThunkType BindingType = EBindingThunkType::Default, typename Traits = MemberFunctionHelper<decltype(MemberFunction)>>
+		requires MemberFunctionValue<MemberFunction>
+	THUNK_API FThunkResult GenerateBindingThunk(typename Traits::ClassType* This, const bool bLogAssembly = false) {
+		return GenerateBindingThunk<BindingType>(&Traits::template StaticInvoker<MemberFunction>, This, bLogAssembly);
+	}
 }
