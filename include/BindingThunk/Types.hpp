@@ -3,10 +3,11 @@
  */
 
 #pragma once
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
-#include <cstddef>
-#include <tuple>
+#include <utility>
 
 namespace BindingThunk {
 	class ArgumentContext;
@@ -123,18 +124,41 @@ namespace BindingThunk {
 	template<MemberFunction T>
 	struct MemberFunctionHelper;
 
-	/** @brief Helper that gives member function traits and a StaticInvoker that's templated to a member function value. */
-	template<typename C, typename R, typename... As>
-	struct MemberFunctionHelper<R(C::*)(As...)> {
-		using ReturnType = R;
-		using ClassType = C;
-		using MemberFunctionType = R (C::*)(As...);
-
-		template<auto MFunction> requires (MemberFunctionValue<MFunction> && std::same_as<decltype(MFunction), MemberFunctionType>)
-		static ReturnType StaticInvoker(ClassType* this_, As... args) {
-			return (this_->*MFunction)(args...);
-		}
+	#define THUNK_DECLARE_MEMBER_FUNCTION_HELPER(CV_QUALS, CLASS_TYPE, REF_QUALS, OBJECT_EXPR, NOEXCEPT_QUALS) \
+	template<typename C, typename R, typename... As> \
+	struct MemberFunctionHelper<R(C::*)(As...) CV_QUALS REF_QUALS NOEXCEPT_QUALS> { \
+		using ReturnType = R; \
+		using ClassType = CLASS_TYPE; \
+		using MemberFunctionType = R (C::*)(As...) CV_QUALS REF_QUALS NOEXCEPT_QUALS; \
+		static constexpr bool ContainsArgumentContext = Detail::ContainsArgumentContextV<R, As...>; \
+		static constexpr bool IsArgumentContextCallback = Detail::IsValidArgumentContextSignatureV<R, As...>; \
+		\
+		template<auto MFunction> requires (MemberFunctionValue<MFunction> && std::same_as<decltype(MFunction), MemberFunctionType>) \
+		static ReturnType StaticInvoker(ClassType* this_, As... args) NOEXCEPT_QUALS { \
+			return ((OBJECT_EXPR).*MFunction)(std::forward<As>(args)...); \
+		} \
 	};
+
+	#define THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(CV_QUALS, CLASS_TYPE, REF_QUALS, OBJECT_EXPR) \
+		THUNK_DECLARE_MEMBER_FUNCTION_HELPER(CV_QUALS, CLASS_TYPE, REF_QUALS, OBJECT_EXPR, ) \
+		THUNK_DECLARE_MEMBER_FUNCTION_HELPER(CV_QUALS, CLASS_TYPE, REF_QUALS, OBJECT_EXPR, noexcept)
+
+	/** @brief Helper that gives member function traits and a StaticInvoker that's templated to a member function value. */
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(, C, , *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const, const C, , *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(volatile, volatile C, , *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const volatile, const volatile C, , *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(, C, &, *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const, const C, &, *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(volatile, volatile C, &, *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const volatile, const volatile C, &, *this_)
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(, C, &&, std::move(*this_))
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const, const C, &&, std::move(*this_))
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(volatile, volatile C, &&, std::move(*this_))
+	THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS(const volatile, const volatile C, &&, std::move(*this_))
+
+	#undef THUNK_DECLARE_MEMBER_FUNCTION_HELPER_VARIANTS
+	#undef THUNK_DECLARE_MEMBER_FUNCTION_HELPER
 
 	#if defined(_WIN32)
 	/** @brief Maps a C++ argument type to the form expected by AsmJit signature generation and the ABI. */

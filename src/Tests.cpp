@@ -516,16 +516,142 @@ static void UnsupportedArgumentCallback(void*, ArgumentContext&) {}
 struct TypedArgumentContextBinder {
     int calls{};
     bool hasRegisterContext{};
+    bool hasReturnValue{};
     uint64_t argsCount{};
-    ArgumentContext* forwarded{};
+    int value{};
+    int referenced{};
+    int pointed{};
+    int originalCalls{};
 };
+
+static TypedArgumentContextBinder* GTypedArgumentContextBinder{};
+
+static int64_t OriginalTypedArgumentContext(int Value, int& ReferenceValue, int* PointerValue) {
+    EXPECT_NE(GTypedArgumentContextBinder, nullptr);
+    if (!GTypedArgumentContextBinder) return 0;
+    ++GTypedArgumentContextBinder->originalCalls;
+    EXPECT_EQ(Value, 3);
+    EXPECT_EQ(ReferenceValue, 5);
+    EXPECT_EQ(*PointerValue, 7);
+
+    ReferenceValue += 4;
+    *PointerValue += 6;
+    return Value + ReferenceValue + *PointerValue;
+}
 
 static void TypedArgumentContextCallback(TypedArgumentContextBinder* Binder, ArgumentContext& Context) {
     ++Binder->calls;
     Binder->hasRegisterContext = Context.HasRegisterContext();
+    Binder->hasReturnValue = Context.HasReturnValue();
     Binder->argsCount = Context.GetArgumentsCount();
-    Binder->forwarded = GetArgumentValueOrFail<ArgumentContext*>(Context, 0);
+    Binder->value = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
+    Binder->referenced = *GetArgumentValueOrFail<int*>(Context, 1);
+    Binder->pointed = *GetArgumentValueOrFail<int*>(Context, 2);
+    const auto ReturnValue = ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context);
+    Context.SetReturnValue(ReturnValue);
 }
+
+struct MemberDefaultBinder {
+    int calls{};
+    int lastValue{};
+    int lastReference{};
+    int lastPointed{};
+
+    int Invoke(int Value, int& ReferenceValue, int* PointerValue) {
+        ++calls;
+        lastValue = Value;
+        lastReference = ReferenceValue;
+        lastPointed = *PointerValue;
+        ReferenceValue += 8;
+        *PointerValue += 13;
+        return Value + ReferenceValue + *PointerValue;
+    }
+};
+
+struct MemberVirtualBase {
+    bool baseCalled{};
+
+    virtual ~MemberVirtualBase() = default;
+
+    virtual int Invoke(int Value) {
+        baseCalled = true;
+        return Value;
+    }
+};
+
+struct MemberVirtualDerived final : MemberVirtualBase {
+    int calls{};
+    int lastValue{};
+
+    int Invoke(int Value) override {
+        ++calls;
+        lastValue = Value;
+        return Value + 100;
+    }
+};
+
+struct MemberExplicitArgumentBinder {
+    int calls{};
+    bool hasRegisterContext{};
+    bool hasReturnValue{};
+    uint64_t argsCount{};
+    int value{};
+    int referenced{};
+    int pointed{};
+    int originalCalls{};
+
+    void Handle(ArgumentContext& Context) {
+        ++calls;
+        hasRegisterContext = Context.HasRegisterContext();
+        hasReturnValue = Context.HasReturnValue();
+        argsCount = Context.GetArgumentsCount();
+        value = static_cast<int>(GetArgumentValueOrFail<uint64_t>(Context, 0));
+        referenced = *GetArgumentValueOrFail<int*>(Context, 1);
+        pointed = *GetArgumentValueOrFail<int*>(Context, 2);
+        const auto ReturnValue = ThunkCast<int64_t(*)(ArgumentContext&)>(GRestoreThunk)(Context);
+        Context.SetReturnValue(ReturnValue);
+    }
+};
+
+static MemberExplicitArgumentBinder* GMemberExplicitArgumentBinder{};
+
+static int64_t OriginalMemberExplicitArgument(int Value, int& ReferenceValue, int* PointerValue) {
+    EXPECT_NE(GMemberExplicitArgumentBinder, nullptr);
+    if (!GMemberExplicitArgumentBinder) return 0;
+    ++GMemberExplicitArgumentBinder->originalCalls;
+    EXPECT_EQ(Value, 3);
+    EXPECT_EQ(ReferenceValue, 5);
+    EXPECT_EQ(*PointerValue, 7);
+
+    ReferenceValue += 4;
+    *PointerValue += 6;
+    return Value + ReferenceValue + *PointerValue;
+}
+
+struct ConstMemberBinder {
+    mutable int calls{};
+    mutable int lastValue{};
+
+    int Inspect(int Value) const {
+        ++calls;
+        lastValue = Value;
+        return Value + 2;
+    }
+};
+
+struct RvalueQualifiedMemberBinder {
+    int calls{};
+    int lastValue{};
+
+    int Consume(std::unique_ptr<int>&& Value) && noexcept {
+        ++calls;
+        lastValue = Value ? *Value : -1;
+        return lastValue + calls;
+    }
+};
+
+static_assert(std::is_same_v<MemberFunctionHelper<decltype(&ConstMemberBinder::Inspect)>::ClassType, const ConstMemberBinder>);
+static_assert(std::is_same_v<MemberFunctionHelper<decltype(&RvalueQualifiedMemberBinder::Consume)>::ClassType, RvalueQualifiedMemberBinder>);
 
 TEST(BindingThunkTests, DefaultNoArgsScalarReturn) {
     DefaultNoArgBinder Binder{};
@@ -539,40 +665,195 @@ TEST(BindingThunkTests, DefaultNoArgsScalarReturn) {
     EXPECT_EQ(Binder.calls, 1);
 }
 
-TEST(BindingThunkTests, TypedArgumentContextCallbackAutoEnablesArgumentMode) {
-    TypedArgumentContextBinder Binder{};
+TEST(BindingThunkTests, MemberFunctionOverloadBindsNonVirtualMemberFunction) {
+    MemberDefaultBinder Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk(&TypedArgumentContextCallback, &Binder);
+    auto BindThunkResult = GenerateBindingThunk<&MemberDefaultBinder::Invoke>(&Binder);
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
-    auto BoundFn = ThunkCast<void(*)(ArgumentContext&)>(BindThunk);
-    auto Storage = MakeArgumentContextStorage(0);
-    auto& InputContext = GetArgumentContext(Storage);
-    BoundFn(InputContext);
+    auto BoundFn = ThunkCast<int(*)(int, int&, int*)>(BindThunk);
+    int ReferenceValue = 7;
+    int PointerValue = 11;
 
+    EXPECT_EQ(BoundFn(5, ReferenceValue, &PointerValue), 44);
     EXPECT_EQ(Binder.calls, 1);
-    EXPECT_FALSE(Binder.hasRegisterContext);
-    EXPECT_EQ(Binder.argsCount, 1);
-    EXPECT_EQ(Binder.forwarded, &InputContext);
+    EXPECT_EQ(Binder.lastValue, 5);
+    EXPECT_EQ(Binder.lastReference, 7);
+    EXPECT_EQ(Binder.lastPointed, 11);
+    EXPECT_EQ(ReferenceValue, 15);
+    EXPECT_EQ(PointerValue, 24);
 }
 
-TEST(BindingThunkTests, TypedArgumentContextCallbackPreservesRegisterMode) {
-    TypedArgumentContextBinder Binder{};
+TEST(BindingThunkTests, MemberFunctionOverloadUsesVirtualDispatch) {
+    MemberVirtualDerived Binder{};
 
-    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register>(&TypedArgumentContextCallback, &Binder);
+    auto BindThunkResult = GenerateBindingThunk<&MemberVirtualBase::Invoke>(static_cast<MemberVirtualBase*>(&Binder));
     ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
     auto BindThunk = std::move(BindThunkResult.value());
 
-    auto BoundFn = ThunkCast<void(*)(ArgumentContext&)>(BindThunk);
-    auto Storage = MakeArgumentContextStorage(0);
-    auto& InputContext = GetArgumentContext(Storage);
-    BoundFn(InputContext);
+    auto BoundFn = ThunkCast<int(*)(int)>(BindThunk);
 
+    EXPECT_EQ(BoundFn(9), 109);
+    EXPECT_FALSE(Binder.baseCalled);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_EQ(Binder.lastValue, 9);
+}
+
+TEST(BindingThunkTests, TypedArgumentContextCallbackSupportsExplicitArgumentBindingSignature) {
+    TypedArgumentContextBinder Binder{};
+    GTypedArgumentContextBinder = &Binder;
+    int ReferenceValue = 5;
+    int PointedValue = 7;
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalTypedArgumentContext, EBindingThunkType::Argument);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    GRestoreThunk = std::move(RestoreThunkResult.value());
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Default, int64_t, int, int&, int*>(&TypedArgumentContextCallback, &Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int64_t(*)(int, int&, int*)>(BindThunk);
+    const auto ReturnValue = BoundFn(3, ReferenceValue, &PointedValue);
+
+    EXPECT_EQ(ReturnValue, 25);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_FALSE(Binder.hasRegisterContext);
+    EXPECT_TRUE(Binder.hasReturnValue);
+    EXPECT_EQ(Binder.argsCount, 3);
+    EXPECT_EQ(Binder.value, 3);
+    EXPECT_EQ(Binder.referenced, 5);
+    EXPECT_EQ(Binder.pointed, 7);
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_EQ(ReferenceValue, 9);
+    EXPECT_EQ(PointedValue, 13);
+
+    GRestoreThunk.reset();
+    GTypedArgumentContextBinder = nullptr;
+}
+
+TEST(BindingThunkTests, MemberFunctionOverloadSupportsExplicitArgumentBindingSignature) {
+    MemberExplicitArgumentBinder Binder{};
+    GMemberExplicitArgumentBinder = &Binder;
+    int ReferenceValue = 5;
+    int PointedValue = 7;
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalMemberExplicitArgument, EBindingThunkType::Argument);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    GRestoreThunk = std::move(RestoreThunkResult.value());
+    auto BindThunkResult = GenerateBindingThunk<&MemberExplicitArgumentBinder::Handle, EBindingThunkType::Default, int64_t, int, int&, int*>(&Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int64_t(*)(int, int&, int*)>(BindThunk);
+    const auto ReturnValue = BoundFn(3, ReferenceValue, &PointedValue);
+
+    EXPECT_EQ(ReturnValue, 25);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_FALSE(Binder.hasRegisterContext);
+    EXPECT_TRUE(Binder.hasReturnValue);
+    EXPECT_EQ(Binder.argsCount, 3);
+    EXPECT_EQ(Binder.value, 3);
+    EXPECT_EQ(Binder.referenced, 5);
+    EXPECT_EQ(Binder.pointed, 7);
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_EQ(ReferenceValue, 9);
+    EXPECT_EQ(PointedValue, 13);
+
+    GRestoreThunk.reset();
+    GMemberExplicitArgumentBinder = nullptr;
+}
+
+TEST(BindingThunkTests, TypedArgumentContextCallbackSupportsExplicitArgumentBindingWithRegisterMode) {
+    TypedArgumentContextBinder Binder{};
+    GTypedArgumentContextBinder = &Binder;
+    int ReferenceValue = 5;
+    int PointedValue = 7;
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalTypedArgumentContext, EBindingThunkType::Argument | EBindingThunkType::Register);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    GRestoreThunk = std::move(RestoreThunkResult.value());
+    auto BindThunkResult = GenerateBindingThunk<EBindingThunkType::Register, int64_t, int, int&, int*>(&TypedArgumentContextCallback, &Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int64_t(*)(int, int&, int*)>(BindThunk);
+    const auto ReturnValue = BoundFn(3, ReferenceValue, &PointedValue);
+
+    EXPECT_EQ(ReturnValue, 25);
     EXPECT_EQ(Binder.calls, 1);
     EXPECT_TRUE(Binder.hasRegisterContext);
-    EXPECT_EQ(Binder.argsCount, 1);
-    EXPECT_EQ(Binder.forwarded, &InputContext);
+    EXPECT_TRUE(Binder.hasReturnValue);
+    EXPECT_EQ(Binder.argsCount, 3);
+    EXPECT_EQ(Binder.value, 3);
+    EXPECT_EQ(Binder.referenced, 5);
+    EXPECT_EQ(Binder.pointed, 7);
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_EQ(ReferenceValue, 9);
+    EXPECT_EQ(PointedValue, 13);
+
+    GRestoreThunk.reset();
+    GTypedArgumentContextBinder = nullptr;
+}
+
+TEST(BindingThunkTests, MemberFunctionOverloadSupportsExplicitArgumentBindingWithRegisterMode) {
+    MemberExplicitArgumentBinder Binder{};
+    GMemberExplicitArgumentBinder = &Binder;
+    int ReferenceValue = 5;
+    int PointedValue = 7;
+
+    auto RestoreThunkResult = GenerateRestoreThunk(&OriginalMemberExplicitArgument, EBindingThunkType::Argument | EBindingThunkType::Register);
+    ASSERT_TRUE(RestoreThunkResult.has_value()) << RestoreThunkResult.error().Message;
+    GRestoreThunk = std::move(RestoreThunkResult.value());
+    auto BindThunkResult = GenerateBindingThunk<&MemberExplicitArgumentBinder::Handle, EBindingThunkType::Register, int64_t, int, int&, int*>(&Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int64_t(*)(int, int&, int*)>(BindThunk);
+    const auto ReturnValue = BoundFn(3, ReferenceValue, &PointedValue);
+
+    EXPECT_EQ(ReturnValue, 25);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_TRUE(Binder.hasRegisterContext);
+    EXPECT_TRUE(Binder.hasReturnValue);
+    EXPECT_EQ(Binder.argsCount, 3);
+    EXPECT_EQ(Binder.value, 3);
+    EXPECT_EQ(Binder.referenced, 5);
+    EXPECT_EQ(Binder.pointed, 7);
+    EXPECT_EQ(Binder.originalCalls, 1);
+    EXPECT_EQ(ReferenceValue, 9);
+    EXPECT_EQ(PointedValue, 13);
+
+    GRestoreThunk.reset();
+    GMemberExplicitArgumentBinder = nullptr;
+}
+
+TEST(BindingThunkTests, MemberFunctionOverloadSupportsConstMemberFunctions) {
+    const ConstMemberBinder Binder{};
+
+    auto BindThunkResult = GenerateBindingThunk<&ConstMemberBinder::Inspect>(&Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int(*)(int)>(BindThunk);
+
+    EXPECT_EQ(BoundFn(10), 12);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_EQ(Binder.lastValue, 10);
+}
+
+TEST(BindingThunkTests, MemberFunctionOverloadSupportsRvalueQualifiedNoexceptMembers) {
+    RvalueQualifiedMemberBinder Binder{};
+
+    auto BindThunkResult = GenerateBindingThunk<&RvalueQualifiedMemberBinder::Consume>(&Binder);
+    ASSERT_TRUE(BindThunkResult.has_value()) << BindThunkResult.error().Message;
+    auto BindThunk = std::move(BindThunkResult.value());
+
+    auto BoundFn = ThunkCast<int(*)(std::unique_ptr<int>&&)>(BindThunk);
+
+    EXPECT_EQ(BoundFn(std::make_unique<int>(23)), 24);
+    EXPECT_EQ(Binder.calls, 1);
+    EXPECT_EQ(Binder.lastValue, 23);
 }
 
 TEST(ContextTests, GetArgumentAsReadsRawBits) {

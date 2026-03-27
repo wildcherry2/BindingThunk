@@ -29,38 +29,61 @@ namespace BindingThunk {
 	 */
 	THUNK_API FThunkResult GenerateBindingThunk(void* ToFn, void* BindParam, const ABISignature& SourceSignature, EBindingThunkType Type = EBindingThunkType::Default, bool bLogAssembly = false);
 
-	/** @brief Typed wrapper for binding thunk generation.
+	/** @brief Typed wrapper for binding thunk generation. Templated types can be inferred.
 	 *  @tparam BindingType Compile-time binding mode flags.
 	 *  @tparam BindParamType Type of the bound parameter pointer.
 	 *  @tparam InReturnType Return type exposed by the generated thunk.
 	 *  @tparam InArgs Unbound argument types exposed by the generated thunk.
 	 *  @param ToFn Target function whose first parameter receives @p BindParam.
 	 *  @param BindParam Pointer bound into the first target argument.
-	 *  @details When the unbound signature is exactly @c void(ArgumentContext&), the generated thunk
-	 *           automatically enables @ref EBindingThunkType::Argument before forwarding to the raw API.
 	 *  @param bLogAssembly When true, emits generated assembly through the configured logger.
 	 *  @return Owning thunk pointer on success, or a detailed error on failure.
 	 */
 	template<EBindingThunkType BindingType = EBindingThunkType::Default, typename BindParamType, typename InReturnType, typename... InArgs>
 	THUNK_API FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const bool bLogAssembly = false) {
 	    static_assert(IsValidBindingThunkType(BindingType), "GenerateBindingThunk typed overload was instantiated with an invalid binding thunk type.");
-	    constexpr auto bContainsArgumentContext = Detail::ContainsArgumentContextV<InReturnType, InArgs...>;
-	    constexpr auto bValidArgumentContextSignature = Detail::IsValidArgumentContextSignatureV<InReturnType, InArgs...>;
-	    static_assert(!bContainsArgumentContext || bValidArgumentContextSignature, "ArgumentContext may only appear as the exact unbound parameter type ArgumentContext& of a void callback.");
-	    static_assert(!HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Argument) || bValidArgumentContextSignature, "Argument binding thunks require a callback signature of void(BindParamType*, ArgumentContext&).");
+	    static_assert(!Detail::ContainsArgumentContextV<InReturnType, InArgs...>, "ArgumentContext callbacks require the explicit typed overload that takes the real thunk return type and arguments as template parameters.");
+	    static_assert(!HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Argument), "Argument binding thunks require the explicit typed overload for void(BindParamType*, ArgumentContext&) callbacks.");
 
 	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
 	    if (!SourceSignature) {
 	        return std::unexpected(SourceSignature.error());
 	    }
 
-	    constexpr auto FinalBindingType = bValidArgumentContextSignature ? (BindingType | EBindingThunkType::Argument) : BindingType;
+	    return GenerateBindingThunk(
+	        reinterpret_cast<void*>(ToFn),
+	        const_cast<void*>(reinterpret_cast<const void*>(BindParam)),
+	        SourceSignature.value(),
+	        BindingType,
+	        bLogAssembly
+	    );
+	}
+
+	/** @brief Typed wrapper for ArgumentContext callbacks with an explicit caller-facing signature. Most templated types can't be inferred.
+	 *  @tparam BindingType Compile-time binding mode flags. @ref EBindingThunkType::Argument is always enabled.
+	 *  @tparam InReturnType Return type exposed by the generated thunk. Can't be inferred.
+	 *  @tparam InArgs Unbound argument types exposed by the generated thunk. Can't be inferred.
+	 *  @tparam BindParamType Type of the bound parameter pointer. Inferred through @p ToFn.
+	 *  @param ToFn Target function whose first parameter receives @p BindParam and whose second parameter receives the marshalled @ref ArgumentContext.
+	 *  @param BindParam Pointer bound into the first target argument.
+	 *  @param bLogAssembly When true, emits generated assembly through the configured logger.
+	 *  @return Owning thunk pointer on success, or a detailed error on failure.
+	 */
+	template<EBindingThunkType BindingType = EBindingThunkType::Default, typename InReturnType, typename... InArgs, typename BindParamType>
+	THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, const bool bLogAssembly = false) {
+	    static_assert(IsValidBindingThunkType(BindingType), "GenerateBindingThunk ArgumentContext overload was instantiated with an invalid binding thunk type.");
+	    static_assert(!Detail::ContainsArgumentContextV<InReturnType, InArgs...>, "The explicit ArgumentContext overload requires the real caller-facing return type and arguments.");
+
+	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
+	    if (!SourceSignature) {
+	        return std::unexpected(SourceSignature.error());
+	    }
 
 	    return GenerateBindingThunk(
 	        reinterpret_cast<void*>(ToFn),
-	        reinterpret_cast<void*>(BindParam),
+	        const_cast<void*>(reinterpret_cast<const void*>(BindParam)),
 	        SourceSignature.value(),
-	        FinalBindingType,
+	        BindingType | EBindingThunkType::Argument,
 	        bLogAssembly
 	    );
 	}
@@ -76,6 +99,26 @@ namespace BindingThunk {
 	template<auto MemberFunction, EBindingThunkType BindingType = EBindingThunkType::Default, typename Traits = MemberFunctionHelper<decltype(MemberFunction)>>
 		requires MemberFunctionValue<MemberFunction>
 	THUNK_API FThunkResult GenerateBindingThunk(typename Traits::ClassType* This, const bool bLogAssembly = false) {
+		static_assert(!Traits::ContainsArgumentContext, "ArgumentContext member callbacks require the explicit member-function overload that takes the real thunk return type and arguments as template parameters.");
+		static_assert(!HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Argument), "Argument binding thunks require the explicit member-function overload for void(ArgumentContext&) callbacks.");
 		return GenerateBindingThunk<BindingType>(&Traits::template StaticInvoker<MemberFunction>, This, bLogAssembly);
+	}
+
+	/** @brief Typed wrapper for safely binding member functions for ArgumentContext types with a specified return type and arguments.
+	 * @tparam MemberFunction The value of the member function to bind to. Can be virtual. It must be a member function with signature @c void(ArgumentContext&).
+	 * @tparam BindingType Compile-time binding mode flags.
+	 * @tparam InReturnType The return type exposed by the generated thunk.
+	 * @tparam InArgs The arguments exposed by the generated thunk.
+	 * @param This The 'this' pointer to bind to the member function.
+	 * @param bLogAssembly When true, emits generated assembly through the configured logger.
+	 * @return Owning thunk pointer on success, or a detailed error on failure.
+	 */
+	template<auto MemberFunction, EBindingThunkType BindingType, typename InReturnType, typename... InArgs>
+		requires MemberFunctionValue<MemberFunction>
+	THUNK_API FThunkResult GenerateBindingThunk(typename MemberFunctionHelper<decltype(MemberFunction)>::ClassType* This, const bool bLogAssembly = false) {
+		using Traits = MemberFunctionHelper<decltype(MemberFunction)>;
+		static_assert(Traits::IsArgumentContextCallback, "The explicit member-function overload requires a callback signature of void(ArgumentContext&).");
+		return GenerateBindingThunk<BindingType, InReturnType, InArgs...>(
+			&MemberFunctionHelper<decltype(MemberFunction)>::template StaticInvoker<MemberFunction>, This, bLogAssembly);
 	}
 }

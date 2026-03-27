@@ -11,7 +11,7 @@ Lambdas, `std::function`, and `std::bind` offer an approach to binding arguments
 This is consistent with C++'s design; no code is generated at runtime, but in order to know the address of the bound data, it would have to be generated at runtime. That's what BindingThunk is for.
 
 ## General Use Cases
-Generally, a thunk can be generated to bind a single pointer to the first argument position. This can theoretically be a pointer to anything, though the most useful option is to bind a `this` pointer to a member function, effectively making a free-function version of a member function that can be passed anywhere. Note that most examples are simpler free-function bindings.<br><br>
+Generally, a thunk can be generated to bind a single pointer to the first argument position. This can theoretically be a pointer to anything, though the most useful option is to bind a `this` pointer to a member function, effectively making a free-function version of a member function that can be passed anywhere. Note that most examples are simpler free-function bindings. See [Member Function Bindings](#member-function-bindings) for more information.<br><br>
 Thunks can also be generated that bind a pointer, pack unbound arguments a structure, call the target function with the structure and bound argument, and return the return value that's set in the structure. These `ArgumentContext`-based thunks can be used to 'normalize' the arguments of various functions and redirect function calls to a single function type.<br><br>
 For any generated thunk, the bound argument must outlive the thunk for safe use. A generated thunk is returned as a `std::unique_ptr` with a specialized deleter that cleans it up. Calling a generated thunk requires calling `get` on the returned `std::unique_ptr` and casting it to the correct function pointer type. If you're wondering why we don't carry over template parameters that cut out the need to cast, it's primarily to make the pointer easier to pass around in different environments.
 
@@ -47,6 +47,20 @@ This type of thunk also has a corresponding optional _restore_ thunk that can be
 From a C++ point-of-view, this is identical to `EBindingThunk::Default`. From an ABI point-of-view, this can be paired with a restore thunk, which, in this case, restores all non-argument registers from the thread-local stack. This is also used in more advanced scenarios for ABI stability, or for reading raw register values at the point where the thunk was called (but this probably shouldn't be used as part of a midhook).
 ### `EBindingThunk::Argument | EBindingThunk::Register`: Binds the provided pointer argument to a provided function that takes the remaining arguments in an `ArgumentContext` reference and saves all non-argument registers to a thread-local stack.
 Similar story to the plain `EBindingThunk::Register`; for C++, it's identical to `EBindingThunk::Argument`, but can be paired with a restore thunk for advanced scenarios for ABI stability or reading raw register values (this also probably shouldn't be used as part of a midhook).
+
+## Member Function Bindings
+With the templated `GenerateBindingThunk` functions, you can easily generate bound member functions by supplying the member function pointer as a template parameter. So with this class: 
+```c++
+class TestClass {
+    virtual void TestMemberFunction(int, bool, double);
+    virtual void TestMemberFunctionArgContext(ArgumentContext&);
+};
+
+TestClass instance{};
+```
+you'd do `auto normalPtr = GenerateBindingThunk<&TestClass::TestMemberFunction>(&instance)` to bind the normal `TestMemberFunction` function or `auto argPtr = GenerateBindingThunk<&TestClass::TestMemberFunctionArgContext, EBindingThunkType::Default, float, double, int>(&instance)` to bind an `ArgumentContext`-based member function with a return type of `float` and 2 arguments of `double` and `int`. Then, to call them, you'd do `reinterpret_cast<void(*)(int, bool, double)>(normalPtr.get())(1, false, 2.0)` or `reinterpret_cast<float(*)(double, int)>(argPtr.get())(1.0, 2)`.
+
+Note that without the templated helpers (`ABISignature`-based), you should bind to a static function that takes the `this` pointer with the other arguments and forward them to the member function. This is what's done by the templated helpers. The reason is so that  pointers-to-member-function types aren't plain pointers per the C++ standard, so they need to be handled by the compiler. Theoretically, you might get away without a static invoker if there is no vtable, or maybe even if the function isn't virtual (compiler-dependent), but it wouldn't be very stable, and the compiler optimizes the static function away anyway. 
 
 ## Platform-Specific and General Quirks
 ### General:
