@@ -254,6 +254,8 @@ namespace BindingThunk {
 	        return Signature;
 	    }
 
+		ReturnType GetCurrentReturnType() const noexcept { return _ReturnType; }
+		const std::array<ArgumentType, asmjit::Globals::kMaxFuncArgs>& GetCurrentArgs() const noexcept { return _Args; }
 	private:
 	    std::array<ArgumentType, asmjit::Globals::kMaxFuncArgs> _Args{};
 	    int _LargestSetArgIndex = -1;
