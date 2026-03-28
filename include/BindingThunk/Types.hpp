@@ -131,6 +131,7 @@ namespace BindingThunk {
 		using ReturnType = R; \
 		using ClassType = CLASS_TYPE; \
 		using MemberFunctionType = R (C::*)(As...) CV_QUALS REF_QUALS NOEXCEPT_QUALS; \
+		using FreeFunctionType = R (As...) CV_QUALS REF_QUALS NOEXCEPT_QUALS; \
 		static constexpr bool ContainsArgumentContext = ContainsArgumentContextV<R, As...>; \
 		static constexpr bool IsArgumentContextCallback = IsValidArgumentContextSignatureV<R, As...>; \
 		\
