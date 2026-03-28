@@ -42,7 +42,7 @@ namespace BindingThunk {
 	template<EBindingThunkType BindingType = EBindingThunkType::Default, typename BindParamType, typename InReturnType, typename... InArgs>
 	THUNK_API FThunkResult GenerateBindingThunk(InReturnType(*ToFn)(BindParamType*, InArgs...), BindParamType* BindParam, const bool bLogAssembly = false) {
 	    static_assert(IsValidBindingThunkType(BindingType), "GenerateBindingThunk typed overload was instantiated with an invalid binding thunk type.");
-	    static_assert(!Detail::ContainsArgumentContextV<InReturnType, InArgs...>, "ArgumentContext callbacks require the explicit typed overload that takes the real thunk return type and arguments as template parameters.");
+	    static_assert(!ContainsArgumentContextV<InReturnType, InArgs...>, "ArgumentContext callbacks require the explicit typed overload that takes the real thunk return type and arguments as template parameters.");
 	    static_assert(!HasBindingThunkTypeFlag(BindingType, EBindingThunkType::Argument), "Argument binding thunks require the explicit typed overload for void(BindParamType*, ArgumentContext&) callbacks.");
 
 	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
@@ -72,7 +72,7 @@ namespace BindingThunk {
 	template<EBindingThunkType BindingType = EBindingThunkType::Default, typename InReturnType, typename... InArgs, typename BindParamType>
 	THUNK_API FThunkResult GenerateBindingThunk(void(*ToFn)(BindParamType*, ArgumentContext&), BindParamType* BindParam, const bool bLogAssembly = false) {
 	    static_assert(IsValidBindingThunkType(BindingType), "GenerateBindingThunk ArgumentContext overload was instantiated with an invalid binding thunk type.");
-	    static_assert(!Detail::ContainsArgumentContextV<InReturnType, InArgs...>, "The explicit ArgumentContext overload requires the real caller-facing return type and arguments.");
+	    static_assert(!ContainsArgumentContextV<InReturnType, InArgs...>, "The explicit ArgumentContext overload requires the real caller-facing return type and arguments.");
 
 	    auto SourceSignature = ABISignature::BuildABISignature<InReturnType, InArgs...>();
 	    if (!SourceSignature) {

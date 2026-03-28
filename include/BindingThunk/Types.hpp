@@ -12,18 +12,19 @@
 namespace BindingThunk {
 	class ArgumentContext;
 
+	template<typename T>
+	inline constexpr bool IsArgumentContextTypeV = std::same_as<std::remove_cvref_t<T>, ArgumentContext>;
+
+	template<typename... Ts>
+	inline constexpr bool ContainsArgumentContextV = (false || ... || IsArgumentContextTypeV<Ts>);
+
+	template<typename ReturnType, typename... Args>
+	inline constexpr bool IsValidArgumentContextSignatureV = false;
+
+	template<typename ReturnType>
+	inline constexpr bool IsValidArgumentContextSignatureV<ReturnType, ArgumentContext&> = std::is_void_v<ReturnType>;
+
 	namespace Detail {
-	    template<typename T>
-	    inline constexpr bool IsArgumentContextTypeV = std::same_as<std::remove_cvref_t<T>, ArgumentContext>;
-
-	    template<typename... Ts>
-	    inline constexpr bool ContainsArgumentContextV = (false || ... || IsArgumentContextTypeV<Ts>);
-
-	    template<typename ReturnType, typename... Args>
-	    inline constexpr bool IsValidArgumentContextSignatureV = false;
-
-	    template<typename ReturnType>
-	    inline constexpr bool IsValidArgumentContextSignatureV<ReturnType, ArgumentContext&> = std::is_void_v<ReturnType>;
 
 	    /** @brief True when @p T is a scalar or reference type accepted by the thunk helpers. */
 	    template<typename T>
@@ -130,8 +131,8 @@ namespace BindingThunk {
 		using ReturnType = R; \
 		using ClassType = CLASS_TYPE; \
 		using MemberFunctionType = R (C::*)(As...) CV_QUALS REF_QUALS NOEXCEPT_QUALS; \
-		static constexpr bool ContainsArgumentContext = Detail::ContainsArgumentContextV<R, As...>; \
-		static constexpr bool IsArgumentContextCallback = Detail::IsValidArgumentContextSignatureV<R, As...>; \
+		static constexpr bool ContainsArgumentContext = ContainsArgumentContextV<R, As...>; \
+		static constexpr bool IsArgumentContextCallback = IsValidArgumentContextSignatureV<R, As...>; \
 		\
 		template<auto MFunction> requires (MemberFunctionValue<MFunction> && std::same_as<decltype(MFunction), MemberFunctionType>) \
 		static ReturnType StaticInvoker(ClassType* this_, As... args) NOEXCEPT_QUALS { \

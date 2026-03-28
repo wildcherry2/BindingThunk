@@ -71,12 +71,12 @@ static_assert(!Detail::ReturnedByValue<FByteValue7>);
 static_assert(!IsValidBindingThunkType(static_cast<EBindingThunkType>(99)));
 static_assert(HasBindingThunkTypeFlag(EBindingThunkType::Argument | EBindingThunkType::Register, EBindingThunkType::Argument));
 static_assert(HasBindingThunkTypeFlag(EBindingThunkType::Argument | EBindingThunkType::Register, EBindingThunkType::Register));
-static_assert(Detail::ContainsArgumentContextV<ArgumentContext&>);
-static_assert(Detail::ContainsArgumentContextV<const ArgumentContext&>);
-static_assert(!Detail::ContainsArgumentContextV<int, double, void*>);
-static_assert(Detail::IsValidArgumentContextSignatureV<void, ArgumentContext&>);
-static_assert(!Detail::IsValidArgumentContextSignatureV<int, ArgumentContext&>);
-static_assert(!Detail::IsValidArgumentContextSignatureV<void, int, ArgumentContext&>);
+static_assert(ContainsArgumentContextV<ArgumentContext&>);
+static_assert(ContainsArgumentContextV<const ArgumentContext&>);
+static_assert(!ContainsArgumentContextV<int, double, void*>);
+static_assert(IsValidArgumentContextSignatureV<void, ArgumentContext&>);
+static_assert(!IsValidArgumentContextSignatureV<int, ArgumentContext&>);
+static_assert(!IsValidArgumentContextSignatureV<void, int, ArgumentContext&>);
 
 static void ThrowingRegisterContextStackFatalHandler(const char* Message) {
     GRegisterContextStackFatalMessage = Message;
